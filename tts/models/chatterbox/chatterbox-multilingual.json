@@ -1,0 +1,9 @@
+{
+  "id": "chatterbox-multilingual",
+  "provider": "chatterbox",
+  "recommendedFor10Gb": true,
+  "supportsReferenceAudio": true,
+  "supportsVoiceCloning": true,
+  "supportsLanguageSelection": true,
+  "languages": ["ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi", "it", "ja", "ko", "ms", "nl", "no", "pl", "pt", "ru", "sv", "sw", "tr", "zh"]
+}

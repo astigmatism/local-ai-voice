@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Builds
+/dist/
+/apps/*/dist/
+/packages/*/dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Runtime data - never commit model weights, caches, uploads, logs, outputs, or secrets
+.env
+.env.*
+!.env.example
+/var/
+/models/
+/cache/
+/voices/
+/uploads/
+/output/
+/logs/
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.ogg
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

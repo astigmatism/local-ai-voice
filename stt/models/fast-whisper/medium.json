@@ -1,0 +1,6 @@
+{
+  "id": "medium",
+  "provider": "fast-whisper",
+  "recommendedFor10Gb": true,
+  "defaultComputeType": "int8_float16"
+}
