@@ -1,0 +1,9 @@
+/opt/local-ai-voice/logs/**/*.log /opt/local-ai-voice/logs/*.log {
+  weekly
+  rotate 8
+  compress
+  missingok
+  notifempty
+  copytruncate
+  create 0640 local-ai-voice local-ai-voice
+}

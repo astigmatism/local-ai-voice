@@ -1,0 +1,14 @@
+{
+  "id": "chatterbox",
+  "role": "tts",
+  "worker": "workers/tts-chatterbox",
+  "defaultModel": "chatterbox-turbo",
+  "transport": "http://127.0.0.1:8001",
+  "gpuOnlyDefault": true,
+  "supportsReferenceAudio": true,
+  "supportsVoiceCloning": true,
+  "notes": [
+    "Chatterbox APIs and checkpoints are version-sensitive; pin and test before upgrades.",
+    "Turbo, English, and multilingual variants are represented in the worker."
+  ]
+}

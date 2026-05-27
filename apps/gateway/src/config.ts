@@ -9,6 +9,7 @@ export interface AppConfig {
   corsOrigin: string;
   portalEnabled: boolean;
   portalDistDir: string;
+  apiDocsEnabled: boolean;
   sttWorkerUrl: string;
   ttsWorkerUrl: string;
   workerTimeoutMs: number;
@@ -69,6 +70,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     corsOrigin: env.CORS_ORIGIN ?? 'http://localhost:8000',
     portalEnabled: boolFromEnv(env.PORTAL_ENABLED, true),
     portalDistDir,
+    apiDocsEnabled: boolFromEnv(env.API_DOCS_ENABLED, true),
     sttWorkerUrl: env.STT_WORKER_URL ?? 'http://127.0.0.1:8002',
     ttsWorkerUrl: env.TTS_WORKER_URL ?? 'http://127.0.0.1:8001',
     workerTimeoutMs: numberFromEnv(env.WORKER_TIMEOUT_MS, 120_000),

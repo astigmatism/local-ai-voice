@@ -4,9 +4,6 @@ import path from 'node:path';
 import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
-import fastifyStatic from '@fastify/static';
-import swagger from '@fastify/swagger';
-import swaggerUi from '@fastify/swagger-ui';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { loadConfig, type AppConfig } from './config.js';
 import { ConfigStore } from './config-store.js';
@@ -59,17 +56,21 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       fields: 50
     }
   });
-  await app.register(swagger, {
-    openapi: {
-      info: {
-        title: 'Local AI Voice Gateway API',
-        version: '0.1.0',
-        description: 'Compatibility and management API for local GPU-first STT/TTS workers.'
-      },
-      servers: [{ url: `http://${config.publicHost}:${config.publicPort}` }]
-    }
-  });
-  await app.register(swaggerUi, { routePrefix: '/api/docs' });
+  if (config.apiDocsEnabled) {
+    const swagger = (await import('@fastify/swagger')).default;
+    const swaggerUi = (await import('@fastify/swagger-ui')).default;
+    await app.register(swagger, {
+      openapi: {
+        info: {
+          title: 'Local AI Voice Gateway API',
+          version: '0.1.0',
+          description: 'Compatibility and management API for local GPU-first STT/TTS workers.'
+        },
+        servers: [{ url: `http://${config.publicHost}:${config.publicPort}` }]
+      }
+    });
+    await app.register(swaggerUi, { routePrefix: '/api/docs' });
+  }
 
   if (config.authEnabled) {
     app.addHook('onRequest', async (request, reply) => {
@@ -111,6 +112,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerCompatRoutes(app, { config, configStore, sttClient, ttsClient });
 
   if (config.portalEnabled && existsSync(config.portalDistDir)) {
+    const fastifyStatic = (await import('@fastify/static')).default;
     await app.register(fastifyStatic, {
       root: config.portalDistDir,
       prefix: '/',
@@ -118,7 +120,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     });
     app.setNotFoundHandler((request, reply) => {
       if (request.method === 'GET' && !request.url.startsWith('/api/') && !path.extname(request.url)) {
-        reply.sendFile('index.html');
+        (reply as typeof reply & { sendFile: (filename: string) => void }).sendFile('index.html');
         return;
       }
       reply.code(404).send({ ok: false, error: 'Not found' });
@@ -127,7 +129,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
     app.get('/', async () => ({
       name: 'local-ai-voice-gateway',
       portal: config.portalEnabled ? 'not-built' : 'disabled',
-      apiDocs: '/api/docs',
+      apiDocs: config.apiDocsEnabled ? '/api/docs' : null,
       health: '/api/health'
     }));
   }

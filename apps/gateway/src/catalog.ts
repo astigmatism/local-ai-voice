@@ -64,7 +64,7 @@ export function sttCatalog(config: AppConfig): ModelDescriptor[] {
 }
 
 export function ttsCatalog(config: AppConfig): ModelDescriptor[] {
-  return [
+  const models: ModelDescriptor[] = [
     {
       id: 'chatterbox-turbo',
       provider: 'chatterbox',
@@ -117,7 +117,8 @@ export function ttsCatalog(config: AppConfig): ModelDescriptor[] {
       supportsVoiceCloning: false,
       notes: ['Scaffold only; no worker implementation is shipped yet.']
     }
-  ].filter((model) => model.provider !== 'kokoro-placeholder' || config.nodeEnv !== 'production');
+  ];
+  return models.filter((model) => model.provider !== 'kokoro-placeholder' || config.nodeEnv !== 'production');
 }
 
 export function builtInVoices(): VoiceDescriptor[] {

@@ -94,9 +94,15 @@ export class WorkerClient {
     return await this.json<Record<string, unknown>>('/config');
   }
 
+  private uploadBlob(upload: UploadedAudio, fallbackType: string): Blob {
+    const bytes = new Uint8Array(upload.buffer.byteLength);
+    bytes.set(upload.buffer);
+    return new Blob([bytes], { type: upload.mimetype || fallbackType });
+  }
+
   async transcribe(upload: UploadedAudio, fields: Record<string, string>): Promise<TranscriptResponse> {
     const form = new FormData();
-    const blob = new Blob([upload.buffer], { type: upload.mimetype || 'application/octet-stream' });
+    const blob = this.uploadBlob(upload, 'application/octet-stream');
     form.append('file', blob, upload.filename || 'audio.wav');
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined) form.append(key, value);
@@ -113,9 +119,7 @@ export class WorkerClient {
       else form.append(key, String(value));
     }
     if (referenceAudio) {
-      const blob = new Blob([referenceAudio.buffer], {
-        type: referenceAudio.mimetype || 'audio/wav'
-      });
+      const blob = this.uploadBlob(referenceAudio, 'audio/wav');
       form.append('reference_audio', blob, referenceAudio.filename || 'reference.wav');
     }
     const response = await this.request('/speak', { method: 'POST', body: form });

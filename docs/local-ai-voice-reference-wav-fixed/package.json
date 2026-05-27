@@ -1,0 +1,37 @@
+{
+  "name": "local-ai-voice-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local AI voice appliance gateway, portal, and GPU-first worker scaffolds.",
+  "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @local-ai-voice/gateway --filter @local-ai-voice/portal dev",
+    "dev:gateway": "pnpm --filter @local-ai-voice/gateway dev",
+    "dev:portal": "pnpm --filter @local-ai-voice/portal dev",
+    "build": "pnpm -r build",
+    "build:gateway": "pnpm --filter @local-ai-voice/gateway build",
+    "build:portal": "pnpm --filter @local-ai-voice/portal build",
+    "start": "pnpm --filter @local-ai-voice/gateway start",
+    "lint": "pnpm -r lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md,yml,yaml,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md,yml,yaml,css}\"",
+    "test": "pnpm -r test && bash scripts/test-workers.sh",
+    "test:watch": "pnpm --filter @local-ai-voice/gateway test:watch",
+    "typecheck": "pnpm -r typecheck",
+    "worker:test": "bash scripts/test-workers.sh",
+    "verify": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.28.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.28.0",
+    "eslint-config-prettier": "^10.1.5",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.33.1"
+  }
+}
