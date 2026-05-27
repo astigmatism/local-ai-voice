@@ -240,6 +240,8 @@ curl -fsS -X POST http://127.0.0.1:8000/transcribe \
   -F file=@sample.wav \
   -F vad_filter=true \
   -F min_silence_duration_ms=1000 | jq .
+
+./scripts/test-transcription.sh sample.wav
 ```
 
 Speak:

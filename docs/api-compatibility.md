@@ -23,11 +23,13 @@ The previous VM baseline exposed a public API on port `8000` and a Chatterbox wo
 | `GET /voice/default` | Node gateway config store | none |
 | `POST /speak` | Node gateway | TTS worker `127.0.0.1:8001` |
 | `POST /transcribe` | Node gateway | STT worker `127.0.0.1:8002` |
+| `POST /v1/audio/transcriptions` | Node gateway | STT worker `127.0.0.1:8002` |
 
 ## Compatibility notes
 
 - `/speak` accepts `text`, `voice`, `speed`, `exaggeration`, `cfg_weight`, `temperature`, `language`, and optional `reference_audio`.
 - `/transcribe` returns legacy snake_case keys while `/api/stt/transcribe` returns modern camelCase keys.
+- `/v1/audio/transcriptions` returns OpenAI-style `{ "text": "..." }`, `verbose_json`, `text`, `srt`, or `vtt` responses based on `response_format`.
 - Default STT remains `large-v3-turbo`.
 - VAD defaults remain enabled with `min_silence_duration_ms=1000`.
 - Public port `8000` is preserved after cutover.
@@ -35,7 +37,7 @@ The previous VM baseline exposed a public API on port `8000` and a Chatterbox wo
 ## Migration sequence
 
 1. Deploy new gateway on `PUBLIC_PORT=8080`.
-2. Verify `/api/health`, `/speak`, and `/transcribe` using test audio.
+2. Verify `/api/health`, `/speak`, `/transcribe`, and `/v1/audio/transcriptions` using test audio.
 3. Move the old public STT service off `8000` or stop it.
 4. Set new gateway `PUBLIC_PORT=8000`.
 5. Restart gateway and repeat compatibility tests.

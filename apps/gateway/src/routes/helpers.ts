@@ -66,6 +66,65 @@ export function getFirstFile(payload: MultipartPayload, fieldNames: string[]): M
   return file;
 }
 
+export interface NormalizeTranscribeFieldsOptions {
+  defaultModel?: string;
+  mapOpenAiModelAlias?: boolean;
+}
+
+function firstNonEmptyField(fields: Record<string, string>, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = fields[name];
+    if (value !== undefined && value !== '') return value;
+  }
+  return undefined;
+}
+
+function setCanonicalField(
+  target: Record<string, string>,
+  fields: Record<string, string>,
+  canonical: string,
+  aliases: string[]
+): void {
+  const value = firstNonEmptyField(fields, [canonical, ...aliases]);
+  for (const alias of aliases) delete target[alias];
+  if (value !== undefined) target[canonical] = value;
+}
+
+export function normalizeTranscribeFields(
+  fields: Record<string, string>,
+  options: NormalizeTranscribeFieldsOptions = {}
+): Record<string, string> {
+  const normalized = { ...fields };
+
+  const openAiSttModelAliases = new Set([
+    'whisper-1',
+    'gpt-4o-transcribe',
+    'gpt-4o-mini-transcribe'
+  ]);
+  const requestedModel = firstNonEmptyField(fields, ['model']);
+  if (requestedModel !== undefined) {
+    const isOpenAiModelAlias = openAiSttModelAliases.has(requestedModel.toLowerCase());
+    normalized.model =
+      options.mapOpenAiModelAlias && isOpenAiModelAlias && options.defaultModel
+        ? options.defaultModel
+        : requestedModel;
+  } else if (options.defaultModel) {
+    normalized.model = options.defaultModel;
+  }
+
+  setCanonicalField(normalized, fields, 'vad_filter', ['vadFilter']);
+  setCanonicalField(normalized, fields, 'min_silence_duration_ms', [
+    'minSilenceDurationMs',
+    'min_silence_ms',
+    'minSilenceMs'
+  ]);
+  setCanonicalField(normalized, fields, 'beam_size', ['beamSize']);
+  setCanonicalField(normalized, fields, 'word_timestamps', ['wordTimestamps']);
+  setCanonicalField(normalized, fields, 'response_format', ['responseFormat']);
+
+  return normalized;
+}
+
 export function normalizeSpeakRequest(
   body: unknown,
   fields: Record<string, string> = {}

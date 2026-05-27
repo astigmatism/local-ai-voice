@@ -76,12 +76,13 @@ Fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `file` | yes | Audio file. WAV, MP3, FLAC, OGG, and common audio content types accepted. |
+| `file` / `audio` | yes | Audio file. WAV, MP3, FLAC, OGG, and common audio content types accepted. |
 | `model` | no | Requested model. Must match loaded model unless worker autoloads default. |
 | `language` | no | Language hint. |
-| `vad_filter` | no | Boolean VAD toggle. |
-| `min_silence_duration_ms` | no | VAD silence threshold. |
-| `word_timestamps` | no | Boolean. |
+| `vad_filter` / `vadFilter` | no | Boolean VAD toggle. |
+| `min_silence_duration_ms` / `minSilenceDurationMs` | no | VAD silence threshold. |
+| `beam_size` / `beamSize` | no | Beam search size. |
+| `word_timestamps` / `wordTimestamps` | no | Boolean. |
 
 Response includes:
 
@@ -98,6 +99,33 @@ Response includes:
   "transcript": "...",
   "segments": []
 }
+```
+
+
+### `POST /v1/audio/transcriptions`
+
+OpenAI-style STT compatibility endpoint for orchestration tools that expect an audio transcription route.
+
+Content type: `multipart/form-data`.
+
+Fields:
+
+| Field | Required | Description |
+| --- | --- | --- |
+| `file` | yes | Audio file. |
+| `model` | no | `whisper-1`, `gpt-4o-transcribe`, and `gpt-4o-mini-transcribe` are accepted and mapped to the configured local STT default. Other model values are forwarded. |
+| `language` | no | Language hint. |
+| `response_format` / `responseFormat` | no | `json`, `verbose_json`, `text`, `srt`, or `vtt`. Defaults to `json`. |
+| `vad_filter` / `vadFilter` | no | Boolean VAD toggle. |
+| `min_silence_duration_ms` / `minSilenceDurationMs` | no | VAD silence threshold. |
+
+Example:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:8000/v1/audio/transcriptions \
+  -F file=@sample.wav \
+  -F model=whisper-1 \
+  -F response_format=verbose_json | jq .
 ```
 
 ## Modern routes
@@ -219,7 +247,7 @@ Same shape as STT unload.
 
 ### `POST /api/stt/transcribe`
 
-Modern STT route. Same multipart behavior as `/transcribe`, but returns camelCase fields.
+Modern STT route. Same multipart behavior as `/transcribe`, but returns camelCase fields. The gateway accepts both `file` and `audio` file fields, normalizes snake_case/camelCase option aliases, and injects the configured STT default model when the caller omits `model`.
 
 ### `POST /api/tts/speak`
 

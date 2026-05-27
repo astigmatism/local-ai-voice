@@ -22,6 +22,7 @@ import {
   getFirstFile,
   getRequiredField,
   normalizeSpeakRequest,
+  normalizeTranscribeFields,
   readMultipartPayload,
   sendError
 } from './helpers.js';
@@ -151,8 +152,10 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
     try {
       const payload = await readMultipartPayload(request, config);
       const audio = getFirstFile(payload, ['file', 'audio']);
+      const mutable = await configStore.read();
+      const fields = normalizeTranscribeFields(payload.fields, { defaultModel: mutable.stt.defaultModel });
       await saveUpload(config.uploadDir, audio, 'stt');
-      return await sttClient.transcribe(audio, payload.fields);
+      return await sttClient.transcribe(audio, fields);
     } catch (error) {
       sendError(reply, error);
     }

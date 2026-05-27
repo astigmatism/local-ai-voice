@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import type { TranscriptResponse } from '@local-ai-voice/shared';
 import { builtInVoices, sttCatalog, ttsCatalog } from '../catalog.js';
 import type { AppConfig } from '../config.js';
 import type { ConfigStore } from '../config-store.js';
@@ -11,7 +12,14 @@ import {
   validateReferenceWavUpload
 } from '../reference-audio.js';
 import type { WorkerClient } from '../worker-client.js';
-import { getFirstFile, normalizeSpeakRequest, readMultipartPayload, sendError } from './helpers.js';
+import {
+  getFirstFile,
+  HttpError,
+  normalizeSpeakRequest,
+  normalizeTranscribeFields,
+  readMultipartPayload,
+  sendError
+} from './helpers.js';
 
 export interface CompatRouteDependencies {
   config: AppConfig;
@@ -20,8 +28,48 @@ export interface CompatRouteDependencies {
   ttsClient: WorkerClient;
 }
 
-function referenceIdFromSpeakRequest(request: { referenceId?: string; referenceAudioId?: string; voice?: string }): string | undefined {
+function referenceIdFromSpeakRequest(request: {
+  referenceId?: string;
+  referenceAudioId?: string;
+  voice?: string;
+}): string | undefined {
   return request.referenceId ?? request.referenceAudioId ?? (request.voice?.endsWith('.wav') ? request.voice : undefined);
+}
+
+function timestamp(seconds: number, decimalSeparator: ',' | '.'): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  const milliseconds = Math.max(0, Math.floor((seconds - whole) * 1000));
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  const pad = (value: number, width = 2) => String(value).padStart(width, '0');
+  return `${pad(hours)}:${pad(minutes)}:${pad(secs)}${decimalSeparator}${pad(milliseconds, 3)}`;
+}
+
+function segmentsToSrt(result: TranscriptResponse): string {
+  return `${result.segments
+    .map(
+      (segment, index) =>
+        `${index + 1}\n${timestamp(segment.start, ',')} --> ${timestamp(segment.end, ',')}\n${segment.text}`
+    )
+    .join('\n\n')}\n`;
+}
+
+function segmentsToVtt(result: TranscriptResponse): string {
+  return `WEBVTT\n\n${result.segments
+    .map((segment) => `${timestamp(segment.start, '.')} --> ${timestamp(segment.end, '.')}\n${segment.text}`)
+    .join('\n\n')}\n`;
+}
+
+function openAiJsonResponse(result: TranscriptResponse, responseFormat: string): Record<string, unknown> {
+  if (responseFormat !== 'verbose_json') return { text: result.transcript };
+  return {
+    task: 'transcribe',
+    language: result.language,
+    duration: result.durationSeconds,
+    text: result.transcript,
+    segments: result.segments
+  };
 }
 
 export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRouteDependencies): Promise<void> {
@@ -123,12 +171,14 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
     try {
       const payload = await readMultipartPayload(request, config);
       const audio = getFirstFile(payload, ['file', 'audio']);
+      const mutable = await configStore.read();
+      const fields = normalizeTranscribeFields(payload.fields, { defaultModel: mutable.stt.defaultModel });
       await saveUpload(config.uploadDir, audio, 'stt');
-      const result = await sttClient.transcribe(audio, payload.fields);
+      const result = await sttClient.transcribe(audio, fields);
       return {
         filename: result.filename ?? audio.filename,
         model: result.model,
-        default_model: result.defaultModel ?? config.defaultSttModel,
+        default_model: result.defaultModel ?? mutable.stt.defaultModel,
         active_model: result.activeModel ?? result.model,
         language: result.language,
         language_probability: result.languageProbability,
@@ -137,6 +187,39 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
         transcript: result.transcript,
         segments: result.segments
       };
+    } catch (error) {
+      sendError(reply, error);
+    }
+  });
+
+  app.post('/v1/audio/transcriptions', async (request, reply) => {
+    try {
+      const payload = await readMultipartPayload(request, config);
+      const audio = getFirstFile(payload, ['file', 'audio']);
+      const mutable = await configStore.read();
+      const fields = normalizeTranscribeFields(payload.fields, {
+        defaultModel: mutable.stt.defaultModel,
+        mapOpenAiModelAlias: true
+      });
+      await saveUpload(config.uploadDir, audio, 'stt');
+      const result = await sttClient.transcribe(audio, fields);
+      const responseFormat = (fields.response_format ?? 'json').toLowerCase();
+      if (!['json', 'verbose_json', 'text', 'srt', 'vtt'].includes(responseFormat)) {
+        throw new HttpError(400, `Unsupported response_format: ${responseFormat}`);
+      }
+      if (responseFormat === 'text') {
+        reply.type('text/plain').send(result.transcript);
+        return;
+      }
+      if (responseFormat === 'srt') {
+        reply.type('application/x-subrip').send(segmentsToSrt(result));
+        return;
+      }
+      if (responseFormat === 'vtt') {
+        reply.type('text/vtt').send(segmentsToVtt(result));
+        return;
+      }
+      return openAiJsonResponse(result, responseFormat);
     } catch (error) {
       sendError(reply, error);
     }

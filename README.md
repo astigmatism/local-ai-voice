@@ -160,8 +160,9 @@ The gateway preserves these legacy routes:
 - `GET /voice/default`
 - `POST /speak`
 - `POST /transcribe`
+- `POST /v1/audio/transcriptions`
 
-Modern orchestration routes live under `/api/*`. See `docs/api.md` or `/api/docs` on the running gateway.
+Modern orchestration routes live under `/api/*`. See `docs/api.md` or `/api/docs` on the running gateway. For WAV-based STT checks, see `docs/stt-test-plan.md` or run `scripts/test-transcription.sh /path/to/sample.wav`.
 
 ## Rollback
 

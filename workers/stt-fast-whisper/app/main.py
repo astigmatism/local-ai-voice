@@ -37,6 +37,7 @@ class Settings(BaseModel):
     preload_default: bool = env_bool("STT_PRELOAD_DEFAULT", False)
     default_vad_filter: bool = env_bool("STT_VAD_FILTER", True)
     default_min_silence_duration_ms: int = int(os.getenv("STT_MIN_SILENCE_DURATION_MS", "1000"))
+    max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", "104857600"))
 
 
 class LoadRequest(BaseModel):
@@ -156,6 +157,48 @@ def load_whisper_model(request: LoadRequest) -> WorkerState:
         raise
 
 
+def first_not_none(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def resolve_transcribe_options(
+    *,
+    vad_filter: bool | None = None,
+    vadFilter: bool | None = None,
+    min_silence_duration_ms: int | None = None,
+    minSilenceDurationMs: int | None = None,
+    beam_size: int | None = None,
+    beamSize: int | None = None,
+    word_timestamps: bool | None = None,
+    wordTimestamps: bool | None = None,
+) -> dict[str, Any]:
+    vad_enabled = bool(first_not_none(vad_filter, vadFilter, settings.default_vad_filter))
+    silence_ms = int(
+        first_not_none(
+            min_silence_duration_ms,
+            minSilenceDurationMs,
+            settings.default_min_silence_duration_ms,
+        )
+    )
+    effective_beam_size = int(first_not_none(beam_size, beamSize, 5))
+    effective_word_timestamps = bool(first_not_none(word_timestamps, wordTimestamps, False))
+
+    if silence_ms < 0:
+        raise HTTPException(status_code=400, detail="min_silence_duration_ms must be >= 0")
+    if effective_beam_size < 1:
+        raise HTTPException(status_code=400, detail="beam_size must be >= 1")
+
+    return {
+        "vad_filter": vad_enabled,
+        "min_silence_duration_ms": silence_ms,
+        "beam_size": effective_beam_size,
+        "word_timestamps": effective_word_timestamps,
+    }
+
+
 @app.on_event("startup")
 def preload_default_model() -> None:
     if not settings.preload_default:
@@ -233,9 +276,13 @@ async def transcribe(
     model: str | None = Form(default=None),
     language: str | None = Form(default=None),
     vad_filter: bool | None = Form(default=None),
+    vadFilter: bool | None = Form(default=None),
     min_silence_duration_ms: int | None = Form(default=None),
-    beam_size: int = Form(default=5),
-    word_timestamps: bool = Form(default=False),
+    minSilenceDurationMs: int | None = Form(default=None),
+    beam_size: int | None = Form(default=None),
+    beamSize: int | None = Form(default=None),
+    word_timestamps: bool | None = Form(default=None),
+    wordTimestamps: bool | None = Form(default=None),
 ) -> dict[str, Any]:
     global _model
     requested_model = model or settings.default_model
@@ -249,23 +296,43 @@ async def transcribe(
             detail=f"Loaded STT model is {state.loadedModel}; load {requested_model} explicitly before transcribing.",
         )
 
+    options = resolve_transcribe_options(
+        vad_filter=vad_filter,
+        vadFilter=vadFilter,
+        min_silence_duration_ms=min_silence_duration_ms,
+        minSilenceDurationMs=minSilenceDurationMs,
+        beam_size=beam_size,
+        beamSize=beamSize,
+        word_timestamps=word_timestamps,
+        wordTimestamps=wordTimestamps,
+    )
+
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty.")
+    if len(audio_bytes) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload exceeds max size of {settings.max_upload_bytes} bytes.",
+        )
+
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     suffix = Path(file.filename or "audio.wav").suffix or ".wav"
     with tempfile.NamedTemporaryFile(delete=False, dir=settings.upload_dir, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        tmp.write(audio_bytes)
         tmp_path = Path(tmp.name)
 
     try:
-        vad_enabled = settings.default_vad_filter if vad_filter is None else vad_filter
-        silence_ms = min_silence_duration_ms or settings.default_min_silence_duration_ms
-        vad_parameters = {"min_silence_duration_ms": silence_ms}
+        vad_enabled = options["vad_filter"]
+        silence_ms = options["min_silence_duration_ms"]
+        vad_parameters = {"min_silence_duration_ms": silence_ms} if vad_enabled else None
         segments_iter, info = _model.transcribe(
             str(tmp_path),
             language=language,
             vad_filter=vad_enabled,
             vad_parameters=vad_parameters,
-            beam_size=beam_size,
-            word_timestamps=word_timestamps,
+            beam_size=options["beam_size"],
+            word_timestamps=options["word_timestamps"],
         )
         segments = []
         transcript_parts: list[str] = []
