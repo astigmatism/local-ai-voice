@@ -7,7 +7,14 @@ export default [
   ...tseslint.configs.recommended,
   prettier,
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', '**/.venv/**']
+    ignores: [
+      '**/dist/**',
+      '**/dist-types/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      '**/.venv/**',
+      '**/*.d.ts'
+    ]
   },
   {
     files: ['**/*.ts', '**/*.tsx'],

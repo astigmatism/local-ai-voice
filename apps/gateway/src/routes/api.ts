@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { LoadModelRequest, ServiceRole, UnloadModelRequest } from '@local-ai-voice/shared';
 import { builtInVoices, sttCatalog, ttsCatalog } from '../catalog.js';
 import type { AppConfig } from '../config.js';
-import { ConfigStore } from '../config-store.js';
+import type { ConfigStore } from '../config-store.js';
 import { getGpuStatus } from '../gpu.js';
 import { recentLogs } from '../logs.js';
 import { fieldBoolean, saveUpload } from '../storage.js';
