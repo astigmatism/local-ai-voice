@@ -23,7 +23,7 @@ The previous VM baseline exposed a public API on port `8000` and a Chatterbox wo
 | `GET /voice/default` | Node gateway config store | none |
 | `POST /speak` | Node gateway | TTS worker `127.0.0.1:8001` |
 | `POST /transcribe` | Node gateway | STT worker `127.0.0.1:8002` |
-| `POST /v1/audio/transcriptions` | Node gateway | STT worker `127.0.0.1:8002` |
+| `POST /v1/audio/transcriptions` and `POST /audio/transcriptions` | Node gateway | STT worker `127.0.0.1:8002` |
 
 ## Compatibility notes
 

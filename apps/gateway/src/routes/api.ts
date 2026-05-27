@@ -24,7 +24,8 @@ import {
   normalizeSpeakRequest,
   normalizeTranscribeFields,
   readMultipartPayload,
-  sendError
+  sendError,
+  transcribeFileFieldNames
 } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
@@ -151,7 +152,7 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
   app.post('/api/stt/transcribe', async (request, reply) => {
     try {
       const payload = await readMultipartPayload(request, config);
-      const audio = getFirstFile(payload, ['file', 'audio']);
+      const audio = getFirstFile(payload, transcribeFileFieldNames);
       const mutable = await configStore.read();
       const fields = normalizeTranscribeFields(payload.fields, { defaultModel: mutable.stt.defaultModel });
       await saveUpload(config.uploadDir, audio, 'stt');

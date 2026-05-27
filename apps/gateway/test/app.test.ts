@@ -5,7 +5,7 @@ import type { SpeakRequest } from '@local-ai-voice/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import type { UploadedAudio } from '../src/storage.js';
+import { isAllowedAudioType, type UploadedAudio } from '../src/storage.js';
 import type { WorkerClient } from '../src/worker-client.js';
 
 const tmpRoots: string[] = [];
@@ -155,6 +155,12 @@ afterEach(() => {
 });
 
 describe('gateway routes', () => {
+  it('allows browser-recorded WebM audio MIME types for transcription uploads', () => {
+    expect(isAllowedAudioType('audio/webm')).toBe(true);
+    expect(isAllowedAudioType('audio/webm;codecs=opus')).toBe(true);
+    expect(isAllowedAudioType('video/webm')).toBe(true);
+  });
+
   it('exposes health and service state', async () => {
     const app = await buildApp({ config: tempConfig(), sttClient: worker('stt'), ttsClient: worker('tts') });
     const response = await app.inject({ method: 'GET', url: '/api/services' });
@@ -183,6 +189,29 @@ describe('gateway routes', () => {
     await app.close();
   });
 
+  it('accepts browser MediaRecorder WebM uploads for STT', async () => {
+    const transcribes: CapturedTranscribe[] = [];
+    const app = await buildApp({ config: tempConfig(), sttClient: worker('stt', [], transcribes), ttsClient: worker('tts') });
+    const multipart = multipartPayload({
+      fileField: 'file',
+      filename: 'browser-recording.webm',
+      contentType: 'audio/webm',
+      file: Buffer.from('fake webm bytes')
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/stt/transcribe',
+      headers: multipart.headers,
+      payload: multipart.payload
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ transcript: 'hello world' });
+    expect(transcribes.at(-1)?.upload.mimetype).toBe('audio/webm');
+    expect(transcribes.at(-1)?.upload.filename).toBe('browser-recording.webm');
+    await app.close();
+  });
 
   it('normalizes modern STT transcribe fields and uses the mutable STT default model', async () => {
     const transcribes: CapturedTranscribe[] = [];
@@ -222,6 +251,30 @@ describe('gateway routes', () => {
     });
     expect(transcribes.at(-1)?.fields.vadFilter).toBeUndefined();
     expect(transcribes.at(-1)?.fields.minSilenceDurationMs).toBeUndefined();
+    await app.close();
+  });
+
+  it('adds a WebM extension when browser uploads use an extensionless blob filename', async () => {
+    const transcribes: CapturedTranscribe[] = [];
+    const app = await buildApp({ config: tempConfig(), sttClient: worker('stt', [], transcribes), ttsClient: worker('tts') });
+    const multipart = multipartPayload({
+      fileField: 'file',
+      filename: 'blob',
+      contentType: 'audio/webm',
+      file: Buffer.from('webm audio placeholder')
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/audio/transcriptions',
+      headers: multipart.headers,
+      payload: multipart.payload
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ text: 'hello world' });
+    expect(transcribes.at(-1)?.upload.filename).toBe('blob.webm');
+    expect(transcribes.at(-1)?.upload.mimetype).toBe('audio/webm');
     await app.close();
   });
 

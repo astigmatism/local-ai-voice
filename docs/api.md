@@ -76,7 +76,7 @@ Fields:
 
 | Field | Required | Description |
 | --- | --- | --- |
-| `file` / `audio` | yes | Audio file. WAV, MP3, FLAC, OGG, and common audio content types accepted. |
+| `file` / `audio` / `audio_file` / `audioFile` / `upload` | yes | Audio file. WAV, MP3, FLAC, OGG, M4A/MP4, AAC, Opus, WebM (`audio/webm` / `video/webm`), and `application/octet-stream` accepted. |
 | `model` | no | Requested model. Must match loaded model unless worker autoloads default. |
 | `language` | no | Language hint. |
 | `vad_filter` / `vadFilter` | no | Boolean VAD toggle. |
@@ -102,7 +102,7 @@ Response includes:
 ```
 
 
-### `POST /v1/audio/transcriptions`
+### `POST /v1/audio/transcriptions` and `POST /audio/transcriptions`
 
 OpenAI-style STT compatibility endpoint for orchestration tools that expect an audio transcription route.
 

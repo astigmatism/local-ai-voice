@@ -1,6 +1,6 @@
 # STT test plan
 
-Use this plan with one of the WAV files on your desktop after the gateway and STT worker are running.
+Use this plan with one of the WAV files on your desktop after the gateway and STT worker are running. It also includes a WebM check for browser/MediaRecorder uploads, which commonly arrive as `audio/webm`.
 
 ## 1. Confirm service state
 
@@ -21,13 +21,16 @@ Expected result:
 ```bash
 cd /opt/local-ai-voice/app
 BASE_URL=http://127.0.0.1:8000 ./scripts/test-transcription.sh "$HOME/Desktop/sample.wav"
+# Optional browser-recording check:
+BASE_URL=http://127.0.0.1:8000 ./scripts/test-transcription.sh "$HOME/Desktop/browser-recording.webm"
 ```
 
-The script exercises all supported public STT shapes:
+The script infers the upload MIME type from the file extension, so `.wav` is sent as `audio/wav` and `.webm` is sent as `audio/webm`. It exercises all supported public STT shapes:
 
 - `POST /api/stt/transcribe` with modern camelCase options and an `audio` file field.
 - `POST /transcribe` with legacy snake_case options and a `file` file field.
-- `POST /v1/audio/transcriptions` with `model=whisper-1`, mapped to the configured local STT default.
+- Browser MediaRecorder/WebM uploads, including `audio/webm`, are accepted by the gateway and forwarded to the STT worker.
+- `POST /v1/audio/transcriptions` and `POST /audio/transcriptions` with `model=whisper-1`, mapped to the configured local STT default.
 
 ## 3. Manual curl checks
 
@@ -58,12 +61,25 @@ curl -fsS -X POST "$BASE_URL/v1/audio/transcriptions" \
   -F response_format=verbose_json | jq .
 ```
 
+Browser/MediaRecorder WebM route:
+
+```bash
+curl -fsS -X POST "$BASE_URL/api/stt/transcribe" \
+  -F "audio=@$HOME/Desktop/browser-recording.webm;type=audio/webm" \
+  -F vadFilter=true \
+  -F minSilenceDurationMs=1000 | jq .
+```
+
+The gateway should not return `Unsupported audio content type: audio/webm`. If your orchestrator uploads a generic filename like `blob`, the gateway now infers a `.webm` extension from the MIME type before forwarding it.
+
+
 ## 4. Interpret failures
 
 | Symptom | Likely area | What to check |
 | --- | --- | --- |
-| `415 Expected multipart/form-data` | Orchestration request shape | Ensure the caller uploads a multipart file field named `file` or `audio`. |
-| `400 Missing required file field` | Orchestration request shape | Confirm the file field is `file` or `audio`, not a JSON/base64 body. |
+| `415 Expected multipart/form-data` | Orchestration request shape | Ensure the caller uploads multipart/form-data rather than JSON/base64. |
+| `415 Unsupported audio content type` | Gateway upload allowlist | Use this patched gateway for browser recordings; it accepts `audio/webm`, `audio/webm;codecs=opus`, `video/webm`, WAV, MP3, FLAC, OGG, M4A/MP4, AAC, and Opus. |
+| `400 Missing required file field` | Orchestration request shape | Confirm the file field is `file`, `audio`, `audio_file`, `audioFile`, or `upload`. |
 | `409 Loaded STT model is ...` | Model state mismatch | Load the same model shown by `/model/default`, or omit `model` so the gateway injects the configured default. |
 | `503 CUDA/NVIDIA GPU is not available` | Worker host/GPU | Check `nvidia-smi`, `ctranslate2.get_cuda_device_count()`, and the systemd environment. |
 | Curl succeeds but orchestration fails | Orchestration app | Compare the orchestration request path, content type, file field name, and model field to the working curl command. |

@@ -20,14 +20,31 @@ export const allowedAudioTypes = new Set([
   'audio/wav',
   'audio/x-wav',
   'audio/wave',
+  'audio/vnd.wave',
   'audio/mpeg',
   'audio/mp3',
   'audio/flac',
   'audio/x-flac',
   'audio/ogg',
+  'application/ogg',
+  'audio/opus',
   'audio/mp4',
+  'audio/x-m4a',
+  'audio/m4a',
+  'audio/aac',
+  'audio/x-aac',
+  'audio/webm',
+  'video/webm',
   'application/octet-stream'
 ]);
+
+export function normalizedMimeType(mimetype: string | undefined): string {
+  return (mimetype ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
+}
+
+export function isAllowedAudioType(mimetype: string | undefined): boolean {
+  return allowedAudioTypes.has(normalizedMimeType(mimetype));
+}
 
 export async function ensureRuntimeDirectories(config: AppConfig): Promise<void> {
   await Promise.all(
@@ -54,19 +71,33 @@ export function safeJoin(base: string, unsafeName: string): string {
   return candidate;
 }
 
-function extensionForMime(mimetype: string, filename: string): string {
+export function extensionForAudioMime(mimetype: string | undefined, filename = ''): string {
   const current = path.extname(filename);
   if (current) return current;
-  if (mimetype.includes('wav')) return '.wav';
-  if (mimetype.includes('mpeg') || mimetype.includes('mp3')) return '.mp3';
-  if (mimetype.includes('flac')) return '.flac';
-  if (mimetype.includes('ogg')) return '.ogg';
+  const normalized = normalizedMimeType(mimetype);
+  if (normalized.includes('wav') || normalized.includes('wave')) return '.wav';
+  if (normalized.includes('mpeg') || normalized.includes('mp3')) return '.mp3';
+  if (normalized.includes('flac')) return '.flac';
+  if (normalized.includes('ogg') || normalized.includes('opus')) return '.ogg';
+  if (normalized.includes('webm')) return '.webm';
+  if (normalized.includes('mp4') || normalized.includes('m4a')) return '.m4a';
+  if (normalized.includes('aac')) return '.aac';
   return '.bin';
+}
+
+export function filenameWithAudioExtension(
+  filename: string | undefined,
+  mimetype: string | undefined,
+  fallbackBase = 'audio'
+): string {
+  const base = path.basename(filename?.trim() || fallbackBase);
+  if (path.extname(base)) return base;
+  return `${base}${extensionForAudioMime(mimetype)}`;
 }
 
 export async function saveUpload(dir: string, upload: UploadedAudio, prefix: string): Promise<string> {
   await fs.mkdir(dir, { recursive: true });
-  const ext = extensionForMime(upload.mimetype, upload.filename);
+  const ext = extensionForAudioMime(upload.mimetype, upload.filename);
   const target = safeJoin(dir, `${prefix}-${Date.now()}-${randomUUID()}${ext}`);
   await fs.writeFile(target, upload.buffer, { flag: 'wx' });
   upload.savedPath = target;

@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { SpeakRequest } from '@local-ai-voice/shared';
 import type { AppConfig } from '../config.js';
-import { allowedAudioTypes, fieldNumber, type MultipartPayload } from '../storage.js';
+import { fieldNumber, filenameWithAudioExtension, isAllowedAudioType, type MultipartPayload } from '../storage.js';
 
 export class HttpError extends Error {
   constructor(
@@ -24,7 +24,7 @@ export async function readMultipartPayload(
 
   for await (const part of request.parts()) {
     if (part.type === 'file') {
-      if (!allowedAudioTypes.has(part.mimetype)) {
+      if (!isAllowedAudioType(part.mimetype)) {
         throw new HttpError(415, `Unsupported audio content type: ${part.mimetype}`);
       }
       let buffer: Buffer;
@@ -42,7 +42,7 @@ export async function readMultipartPayload(
       }
       files.push({
         fieldname: part.fieldname,
-        filename: part.filename || `${part.fieldname}.wav`,
+        filename: filenameWithAudioExtension(part.filename, part.mimetype, part.fieldname),
         mimetype: part.mimetype,
         buffer
       });
@@ -53,6 +53,8 @@ export async function readMultipartPayload(
 
   return { fields, files };
 }
+
+export const transcribeFileFieldNames = ['file', 'audio', 'audio_file', 'audioFile', 'upload'];
 
 export function getRequiredField(fields: Record<string, string>, name: string): string {
   const value = fields[name];

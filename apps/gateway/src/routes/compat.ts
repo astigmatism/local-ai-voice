@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { TranscriptResponse } from '@local-ai-voice/shared';
 import { builtInVoices, sttCatalog, ttsCatalog } from '../catalog.js';
 import type { AppConfig } from '../config.js';
@@ -18,7 +18,8 @@ import {
   normalizeSpeakRequest,
   normalizeTranscribeFields,
   readMultipartPayload,
-  sendError
+  sendError,
+  transcribeFileFieldNames
 } from './helpers.js';
 
 export interface CompatRouteDependencies {
@@ -70,6 +71,44 @@ function openAiJsonResponse(result: TranscriptResponse, responseFormat: string):
     text: result.transcript,
     segments: result.segments
   };
+}
+
+async function handleOpenAiTranscription(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  deps: Pick<CompatRouteDependencies, 'config' | 'configStore' | 'sttClient'>
+): Promise<Record<string, unknown> | void> {
+  const { config, configStore, sttClient } = deps;
+  try {
+    const payload = await readMultipartPayload(request, config);
+    const audio = getFirstFile(payload, transcribeFileFieldNames);
+    const mutable = await configStore.read();
+    const fields = normalizeTranscribeFields(payload.fields, {
+      defaultModel: mutable.stt.defaultModel,
+      mapOpenAiModelAlias: true
+    });
+    await saveUpload(config.uploadDir, audio, 'stt');
+    const result = await sttClient.transcribe(audio, fields);
+    const responseFormat = (fields.response_format ?? 'json').toLowerCase();
+    if (!['json', 'verbose_json', 'text', 'srt', 'vtt'].includes(responseFormat)) {
+      throw new HttpError(400, `Unsupported response_format: ${responseFormat}`);
+    }
+    if (responseFormat === 'text') {
+      reply.type('text/plain').send(result.transcript);
+      return;
+    }
+    if (responseFormat === 'srt') {
+      reply.type('application/x-subrip').send(segmentsToSrt(result));
+      return;
+    }
+    if (responseFormat === 'vtt') {
+      reply.type('text/vtt').send(segmentsToVtt(result));
+      return;
+    }
+    return openAiJsonResponse(result, responseFormat);
+  } catch (error) {
+    sendError(reply, error);
+  }
 }
 
 export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRouteDependencies): Promise<void> {
@@ -170,7 +209,7 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
   app.post('/transcribe', async (request, reply) => {
     try {
       const payload = await readMultipartPayload(request, config);
-      const audio = getFirstFile(payload, ['file', 'audio']);
+      const audio = getFirstFile(payload, transcribeFileFieldNames);
       const mutable = await configStore.read();
       const fields = normalizeTranscribeFields(payload.fields, { defaultModel: mutable.stt.defaultModel });
       await saveUpload(config.uploadDir, audio, 'stt');
@@ -192,36 +231,10 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
     }
   });
 
-  app.post('/v1/audio/transcriptions', async (request, reply) => {
-    try {
-      const payload = await readMultipartPayload(request, config);
-      const audio = getFirstFile(payload, ['file', 'audio']);
-      const mutable = await configStore.read();
-      const fields = normalizeTranscribeFields(payload.fields, {
-        defaultModel: mutable.stt.defaultModel,
-        mapOpenAiModelAlias: true
-      });
-      await saveUpload(config.uploadDir, audio, 'stt');
-      const result = await sttClient.transcribe(audio, fields);
-      const responseFormat = (fields.response_format ?? 'json').toLowerCase();
-      if (!['json', 'verbose_json', 'text', 'srt', 'vtt'].includes(responseFormat)) {
-        throw new HttpError(400, `Unsupported response_format: ${responseFormat}`);
-      }
-      if (responseFormat === 'text') {
-        reply.type('text/plain').send(result.transcript);
-        return;
-      }
-      if (responseFormat === 'srt') {
-        reply.type('application/x-subrip').send(segmentsToSrt(result));
-        return;
-      }
-      if (responseFormat === 'vtt') {
-        reply.type('text/vtt').send(segmentsToVtt(result));
-        return;
-      }
-      return openAiJsonResponse(result, responseFormat);
-    } catch (error) {
-      sendError(reply, error);
-    }
-  });
+  app.post('/v1/audio/transcriptions', async (request, reply) =>
+    await handleOpenAiTranscription(request, reply, { config, configStore, sttClient })
+  );
+  app.post('/audio/transcriptions', async (request, reply) =>
+    await handleOpenAiTranscription(request, reply, { config, configStore, sttClient })
+  );
 }
