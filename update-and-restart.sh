@@ -1,96 +1,70 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/home/astigmatism/local-ai-voice}"
-SERVICE_NAME="${SERVICE_NAME:-local-ai-voice-api.service}"
-BRANCH="${BRANCH:-main}"
+SERVICES=(
+  "local-ai-voice-gateway.service"
+  "local-ai-voice-stt-worker.service"
+  "local-ai-voice-tts-chatterbox.service"
+)
 
-cd "$APP_DIR"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+cd "$ROOT_DIR"
 
-echo "== Local AI Voice server update =="
-echo "App dir: $APP_DIR"
-echo "Service: $SERVICE_NAME"
-echo "Branch: $BRANCH"
-echo
+echo "==> Running from: $ROOT_DIR"
 
-echo "== Verifying git working tree =="
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "Error: working tree is not clean on the server."
-  echo "Refusing to overwrite local changes."
-  git status --short
+if [ ! -d ".git" ]; then
+  echo "ERROR: This script must be run from inside the git repository root." >&2
   exit 1
 fi
 
-echo
-echo "== Fetching latest source =="
-git fetch origin "$BRANCH"
-git checkout "$BRANCH"
-git pull --ff-only origin "$BRANCH"
-
-echo
-echo "== Checking Node tooling =="
-if ! command -v node >/dev/null 2>&1; then
-  echo "Error: node is not installed."
+if ! command -v git >/dev/null 2>&1; then
+  echo "ERROR: git is not installed or not available on PATH." >&2
   exit 1
 fi
 
-if ! command -v corepack >/dev/null 2>&1; then
-  echo "Error: corepack is not installed or not available."
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "ERROR: systemctl is not available. This script is intended for the systemd VM deployment." >&2
   exit 1
 fi
 
-corepack enable
+echo "==> Stopping services"
+for service in "${SERVICES[@]}"; do
+  sudo systemctl stop "$service"
+done
 
-if ! command -v pnpm >/dev/null 2>&1; then
-  echo "Error: pnpm is not available after enabling corepack."
+echo "==> Updating repository"
+git fetch --prune
+git pull --ff-only
+
+echo "==> Preparing Node/pnpm"
+if command -v corepack >/dev/null 2>&1; then
+  corepack enable
+  corepack prepare pnpm@10.12.4 --activate
+else
+  echo "ERROR: corepack was not found. Install Node.js 24 first." >&2
   exit 1
 fi
 
-echo "node: $(node --version)"
-echo "pnpm: $(pnpm --version)"
+echo "==> Installing/updating Node dependencies"
+pnpm install --frozen-lockfile=false
 
-echo
-echo "== Installing dependencies =="
-pnpm install --frozen-lockfile
+echo "==> Running validation"
+pnpm verify
 
-echo
-echo "== Running checks =="
+echo "==> Running worker syntax checks"
+bash scripts/test-workers.sh
 
-if pnpm run | grep -q '^  lint'; then
-  pnpm lint
-else
-  echo "No lint script found; skipping lint."
-fi
+echo "==> Restarting services"
+for service in "${SERVICES[@]}"; do
+  sudo systemctl restart "$service"
+done
 
-if pnpm run | grep -q '^  typecheck'; then
-  pnpm typecheck
-else
-  echo "No typecheck script found; skipping typecheck."
-fi
+echo "==> Service status"
+for service in "${SERVICES[@]}"; do
+  sudo systemctl --no-pager --full status "$service" || true
+done
 
-if pnpm run | grep -q '^  test'; then
-  pnpm test
-else
-  echo "No test script found; skipping tests."
-fi
+echo "==> Running gateway smoke test"
+bash scripts/smoke-test-api.sh
 
-if pnpm run | grep -q '^  build'; then
-  pnpm build
-else
-  echo "No build script found; skipping build."
-fi
-
-echo
-echo "== Restarting service =="
-sudo systemctl restart "$SERVICE_NAME"
-
-echo
-echo "== Service status =="
-systemctl --no-pager --full status "$SERVICE_NAME"
-
-echo
-echo "== Listening ports =="
-ss -tulpn | grep -E ':8000|:8001|:8002|:8010' || true
-
-echo
-echo "Update complete."
+echo "==> Update and restart completed successfully."
