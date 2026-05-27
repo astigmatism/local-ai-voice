@@ -42,6 +42,7 @@ class Settings(BaseModel):
     output_dir: Path = Path(os.getenv("OUTPUT_DIR", "/opt/local-ai-voice/output")) / "tts"
     max_reference_audio_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", "104857600"))
     auto_load_default: bool = env_bool("TTS_AUTO_LOAD_DEFAULT", True)
+    preload_default: bool = env_bool("TTS_PRELOAD_DEFAULT", False)
 
 
 class LoadRequest(BaseModel):
@@ -177,6 +178,19 @@ def load_chatterbox_model(request: LoadRequest) -> WorkerState:
         _model = None
         set_state("failed", loadedModel=None, language=language, device=device, error=str(exc))
         raise
+
+
+@app.on_event("startup")
+def preload_default_model() -> None:
+    if not settings.preload_default:
+        return
+
+    load_chatterbox_model(
+        LoadRequest(
+            model=settings.default_model,
+            language=settings.default_language,
+        )
+    )
 
 
 def looks_like_wav(data: bytes) -> bool:
