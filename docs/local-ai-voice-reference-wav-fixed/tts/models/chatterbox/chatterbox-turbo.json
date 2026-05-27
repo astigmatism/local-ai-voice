@@ -1,8 +1,0 @@
-{
-  "id": "chatterbox-turbo",
-  "provider": "chatterbox",
-  "recommendedFor10Gb": true,
-  "supportsReferenceAudio": true,
-  "supportsVoiceCloning": true,
-  "languages": ["en"]
-}

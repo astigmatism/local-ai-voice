@@ -34,6 +34,7 @@ class Settings(BaseModel):
     cache_dir: Path = Path(os.getenv("CACHE_DIR", "/opt/local-ai-voice/cache")) / "stt" / "fast-whisper"
     upload_dir: Path = Path(os.getenv("UPLOAD_DIR", "/opt/local-ai-voice/uploads")) / "stt"
     auto_load_default: bool = env_bool("STT_AUTO_LOAD_DEFAULT", True)
+    preload_default: bool = env_bool("STT_PRELOAD_DEFAULT", False)
     default_vad_filter: bool = env_bool("STT_VAD_FILTER", True)
     default_min_silence_duration_ms: int = int(os.getenv("STT_MIN_SILENCE_DURATION_MS", "1000"))
 
@@ -153,6 +154,20 @@ def load_whisper_model(request: LoadRequest) -> WorkerState:
         _model = None
         set_state("failed", loadedModel=None, error=str(exc), computeType=compute_type, device=device)
         raise
+
+
+@app.on_event("startup")
+def preload_default_model() -> None:
+    if not settings.preload_default:
+        return
+
+    load_whisper_model(
+        LoadRequest(
+            model=settings.default_model,
+            computeType=settings.compute_type,
+            device=settings.device,
+        )
+    )
 
 
 @app.get("/health")

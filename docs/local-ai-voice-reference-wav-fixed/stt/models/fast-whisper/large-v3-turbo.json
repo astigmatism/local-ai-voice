@@ -1,7 +1,0 @@
-{
-  "id": "large-v3-turbo",
-  "provider": "fast-whisper",
-  "recommendedFor10Gb": true,
-  "defaultComputeType": "int8_float16",
-  "download": "handled by faster-whisper/Hugging Face cache at runtime"
-}
