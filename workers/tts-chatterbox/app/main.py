@@ -5,6 +5,7 @@ import inspect
 import io
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -43,6 +44,13 @@ class Settings(BaseModel):
     max_reference_audio_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", "104857600"))
     auto_load_default: bool = env_bool("TTS_AUTO_LOAD_DEFAULT", True)
     preload_default: bool = env_bool("TTS_PRELOAD_DEFAULT", False)
+    normalize_text: bool = env_bool("TTS_NORMALIZE_TEXT", True)
+    chunk_text: bool = env_bool("TTS_CHUNK_TEXT", True)
+    target_chunk_chars: int = int(os.getenv("TTS_TARGET_CHUNK_CHARS", "200"))
+    max_chunk_chars: int = int(os.getenv("TTS_MAX_CHUNK_CHARS", "300"))
+    chunk_silence_ms: int = int(os.getenv("TTS_CHUNK_SILENCE_MS", "180"))
+    default_exaggeration: float | None = float(os.getenv("TTS_DEFAULT_EXAGGERATION", "0.5"))
+    default_cfg_weight: float | None = float(os.getenv("TTS_DEFAULT_CFG_WEIGHT", "0.35"))
 
 
 class LoadRequest(BaseModel):
@@ -246,6 +254,109 @@ def safe_voice_path(reference_audio_id: str | None) -> Path | None:
     return resolved_candidate
 
 
+
+TERMINAL_PUNCTUATION = (".", "?", "!")
+SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+")
+SOFT_BOUNDARIES = (",", ";", ":", " - ", " -- ", "—", "–")
+
+
+def normalize_tts_text(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    normalized = re.sub(r"\n\s*[-*+]\s+", ". ", normalized)
+    normalized = re.sub(r"\s*\n\s*", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if normalized and normalized[-1] not in TERMINAL_PUNCTUATION:
+        normalized = f"{normalized}."
+    return normalized
+
+
+def ensure_terminal_punctuation(text: str) -> str:
+    stripped = text.strip()
+    if stripped and stripped[-1] not in TERMINAL_PUNCTUATION:
+        return f"{stripped}."
+    return stripped
+
+
+def split_long_segment(segment: str, max_chars: int) -> list[str]:
+    remaining = segment.strip()
+    chunks: list[str] = []
+    while len(remaining) > max_chars:
+        window = remaining[: max_chars + 1]
+        split_at = -1
+        for boundary in SOFT_BOUNDARIES:
+            candidate = window.rfind(boundary)
+            if candidate > max_chars // 2:
+                split_at = candidate + len(boundary)
+                break
+        if split_at <= 0:
+            candidate = window.rfind(" ")
+            if candidate > max_chars // 2:
+                split_at = candidate
+        if split_at <= 0:
+            split_at = max_chars
+        chunks.append(ensure_terminal_punctuation(remaining[:split_at]))
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        chunks.append(ensure_terminal_punctuation(remaining))
+    return chunks
+
+
+def chunk_tts_text(text: str, target_chars: int, max_chars: int) -> list[str]:
+    if max_chars < 80:
+        raise HTTPException(status_code=500, detail="TTS_MAX_CHUNK_CHARS must be at least 80.")
+    target = max(80, min(target_chars, max_chars))
+    sentences = [part.strip() for part in SENTENCE_BOUNDARY.split(text) if part.strip()]
+    chunks: list[str] = []
+    current = ""
+    for sentence in sentences:
+        sentence = ensure_terminal_punctuation(sentence)
+        if len(sentence) > max_chars:
+            if current:
+                chunks.append(ensure_terminal_punctuation(current))
+                current = ""
+            chunks.extend(split_long_segment(sentence, max_chars))
+            continue
+        candidate = f"{current} {sentence}".strip() if current else sentence
+        if current and len(candidate) > target:
+            chunks.append(ensure_terminal_punctuation(current))
+            current = sentence
+        else:
+            current = candidate
+    if current:
+        chunks.append(ensure_terminal_punctuation(current))
+    return chunks or [ensure_terminal_punctuation(text)]
+
+
+def prepare_tts_chunks(text: str) -> list[str]:
+    prepared = normalize_tts_text(text) if settings.normalize_text else text.strip()
+    if not prepared:
+        raise HTTPException(status_code=400, detail="Missing required text field.")
+    if not settings.chunk_text or len(prepared) <= settings.max_chunk_chars:
+        return [ensure_terminal_punctuation(prepared)]
+    return chunk_tts_text(prepared, settings.target_chunk_chars, settings.max_chunk_chars)
+
+
+def concatenate_wavs(wavs: list[Any], sample_rate: int, silence_ms: int) -> Any:
+    if len(wavs) == 1:
+        return wavs[0]
+    import torch
+
+    pieces: list[Any] = []
+    for index, wav in enumerate(wavs):
+        pieces.append(wav)
+        if index == len(wavs) - 1 or silence_ms <= 0:
+            continue
+        silence_samples = max(1, round(sample_rate * silence_ms / 1000))
+        if wav.dim() == 1:
+            silence_shape = (silence_samples,)
+        else:
+            silence_shape = (*wav.shape[:-1], silence_samples)
+        pieces.append(torch.zeros(silence_shape, dtype=wav.dtype, device=wav.device))
+    return torch.cat(pieces, dim=-1)
+
+
 def supported_generate_kwargs(model: Any, kwargs: dict[str, Any], require_reference_audio: bool) -> dict[str, Any]:
     filtered = {key: value for key, value in kwargs.items() if value is not None}
     try:
@@ -381,20 +492,48 @@ async def speak(
     try:
         if prompt_path:
             logger.info("Applying Chatterbox reference audio id=%s", prompt_path.name)
+        effective_exaggeration = (
+            exaggeration if exaggeration is not None else settings.default_exaggeration
+        )
+        effective_cfg_weight = (
+            cfg_weight
+            if cfg_weight is not None
+            else cfgWeight
+            if cfgWeight is not None
+            else settings.default_cfg_weight
+        )
         kwargs = supported_generate_kwargs(
             _model,
             {
                 "audio_prompt_path": str(prompt_path) if prompt_path else None,
                 "language_id": language_id,
-                "exaggeration": exaggeration,
-                "cfg_weight": cfg_weight if cfg_weight is not None else cfgWeight,
+                "exaggeration": effective_exaggeration,
+                "cfg_weight": effective_cfg_weight,
                 "temperature": temperature,
                 "speed": speed,
             },
             require_reference_audio=prompt_path is not None,
         )
+        chunks = prepare_tts_chunks(text)
+        logger.info(
+            "Generating Chatterbox speech chunks=%s total_chars=%s "
+            "max_chunk_chars=%s cfg_weight=%s exaggeration=%s",
+            len(chunks),
+            len(text),
+            settings.max_chunk_chars,
+            kwargs.get("cfg_weight"),
+            kwargs.get("exaggeration"),
+        )
+        generated_wavs: list[Any] = []
         try:
-            wav = _model.generate(text, **kwargs)
+            for index, chunk in enumerate(chunks, start=1):
+                logger.info(
+                    "Generating Chatterbox chunk index=%s/%s chars=%s",
+                    index,
+                    len(chunks),
+                    len(chunk),
+                )
+                generated_wavs.append(_model.generate(chunk, **kwargs))
         except TypeError as exc:
             if prompt_path and "audio_prompt_path" in str(exc):
                 raise HTTPException(
@@ -403,6 +542,7 @@ async def speak(
                 ) from exc
             raise
         sample_rate = int(getattr(_model, "sr", 24000))
+        wav = concatenate_wavs(generated_wavs, sample_rate, settings.chunk_silence_ms)
         payload = wav_bytes(wav, sample_rate)
         headers = {
             "content-disposition": 'attachment; filename="speech.wav"',
@@ -411,6 +551,8 @@ async def speak(
             "x-local-ai-voice-engine": "chatterbox-tts",
             "x-local-ai-voice-model": str(state.loadedModel),
         }
+        headers["x-local-ai-voice-chunks"] = str(len(chunks))
+        headers["x-local-ai-voice-max-chunk-chars"] = str(settings.max_chunk_chars)
         if prompt_path:
             headers["x-local-ai-voice-reference-audio"] = prompt_path.name
         return Response(content=payload, media_type="audio/wav", headers=headers)
