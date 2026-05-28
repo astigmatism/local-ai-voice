@@ -127,7 +127,7 @@ Soft unload asks the worker to delete model references and clear CUDA caches whe
 
 ## Chatterbox reference WAV quick check
 
-The portal card labeled **Chatterbox reference WAV** uploads a WAV to `/api/tts/reference-audio`, activates it by default, and displays the active reference id. The same flow can be checked from the shell:
+The portal card labeled **Chatterbox reference WAV** uploads a WAV to `/api/tts/reference-audio`, activates it by default, and displays the active reference id. Browser/orchestrator clients can also send a microphone recording if it has already been encoded as a real `.wav` file with an `audio/wav` content type and RIFF/WAVE header; the gateway validates WAV input but does not transcode WebM/Opus or MP4 recordings. The same flow can be checked from the shell:
 
 ```bash
 # Upload and activate a reference WAV

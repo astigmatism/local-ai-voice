@@ -286,7 +286,7 @@ JSON example overriding the active reference:
 
 ### `POST /api/tts/reference-audio`
 
-Uploads a Chatterbox reference WAV under the provider voice directory, validates that the upload is a RIFF/WAVE file, and by default makes it the active reference for future speak requests. The response intentionally returns a stable id rather than an absolute server path.
+Uploads a Chatterbox reference WAV under the provider voice directory, validates that the upload is a RIFF/WAVE file, and by default makes it the active reference for future speak requests. The upload may come from a selected WAV file or an orchestrator/browser recorder that has already encoded microphone PCM as a real `.wav` file. The gateway accepts and stores WAV; it does not transcode WebM/Opus, MP4/M4A, or other browser recording containers for reference-audio uploads. The response intentionally returns a stable id rather than an absolute server path.
 
 ```bash
 curl -f -X POST http://127.0.0.1:8000/api/tts/reference-audio \
