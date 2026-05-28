@@ -144,6 +144,9 @@ curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
   -H "Content-Type: application/json" \
   -d '{"text":"This should use the uploaded reference WAV.","provider":"chatterbox"}' \
   --output out.wav
+
+# Delete an uploaded reference WAV by the safe id returned from upload or /voices
+curl -f -X DELETE http://127.0.0.1:8000/api/tts/reference-audio/<reference-id>.wav | jq .
 ```
 
 For logs, check `journalctl -u local-ai-voice-gateway` and `journalctl -u local-ai-voice-tts-chatterbox`; the TTS worker logs a sanitized reference id when it applies reference audio.

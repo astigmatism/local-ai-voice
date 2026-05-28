@@ -46,7 +46,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(cors, {
     origin: config.corsOrigin === '*' ? true : config.corsOrigin,
     credentials: false,
-    methods: ['GET', 'POST', 'PATCH', 'OPTIONS']
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS']
   });
   await app.register(formbody);
   await app.register(multipart, {

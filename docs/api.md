@@ -18,7 +18,7 @@ Returns STT and TTS model catalogs plus the legacy STT default/active model fiel
 
 ### `GET /voices`
 
-Returns voice/reference descriptors. Currently includes the Chatterbox reference-upload placeholder.
+Returns voice/reference descriptors. Uploaded Chatterbox reference WAV descriptors include `canDelete: true` and a `deleteUrl` pointing at the safe delete route.
 
 ### `GET /model/default`
 
@@ -306,11 +306,48 @@ Response:
   "filename": "sample-reference.wav",
   "contentType": "audio/wav",
   "sizeBytes": 123456,
-  "active": true
+  "active": true,
+  "canDelete": true,
+  "deleteUrl": "/api/tts/reference-audio/reference-2026-05-27T00-00-00-000Z-uuid.wav"
 }
 ```
 
 Invalid MIME types, non-WAV extensions, non-RIFF/WAVE file headers, traversal-style reference ids, missing files, and unreadable files return explicit 4xx errors.
+
+### `DELETE /api/tts/reference-audio/:referenceId`
+
+Deletes a previously uploaded Chatterbox reference WAV from the provider voice directory. The `referenceId` must be the safe basename returned by the upload or `/voices` response; path traversal and arbitrary file paths are rejected. If the deleted file was the service's active/default reference, the active reference is cleared.
+
+```bash
+curl -f -X DELETE \
+  http://127.0.0.1:8000/api/tts/reference-audio/reference-2026-05-27T00-00-00-000Z-uuid.wav | jq .
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "deleted": true,
+  "provider": "chatterbox",
+  "referenceId": "reference-2026-05-27T00-00-00-000Z-uuid.wav",
+  "id": "reference-2026-05-27T00-00-00-000Z-uuid.wav",
+  "filename": "reference-2026-05-27T00-00-00-000Z-uuid.wav",
+  "contentType": "audio/wav",
+  "sizeBytes": 123456,
+  "activeReferenceCleared": false
+}
+```
+
+For clients that cannot route dynamic URL segments easily, the same delete operation is also available as `DELETE /api/tts/reference-audio` with a JSON body containing `referenceId`, `referenceAudioId`, or `id`:
+
+```bash
+curl -f -X DELETE http://127.0.0.1:8000/api/tts/reference-audio \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"reference-2026-05-27T00-00-00-000Z-uuid.wav"}' | jq .
+```
+
+Missing references return `404`. Unsafe ids such as `../sample.wav` return `400` and are never interpreted as filesystem paths.
 
 ### `GET /api/config`
 

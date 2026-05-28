@@ -37,6 +37,21 @@ function referenceIdFromSpeakRequest(request: {
   return request.referenceId ?? request.referenceAudioId ?? (request.voice?.endsWith('.wav') ? request.voice : undefined);
 }
 
+function referenceDeletePath(referenceId: string): string {
+  return `/api/tts/reference-audio/${encodeURIComponent(referenceId)}`;
+}
+
+function referenceDeleteLinks(
+  referenceId: string
+): { canDelete: true; deleteUrl: string; _links: { delete: { href: string; method: 'DELETE' } } } {
+  const deleteUrl = referenceDeletePath(referenceId);
+  return {
+    canDelete: true,
+    deleteUrl,
+    _links: { delete: { href: deleteUrl, method: 'DELETE' } }
+  };
+}
+
 function timestamp(seconds: number, decimalSeparator: ',' | '.'): string {
   const whole = Math.max(0, Math.floor(seconds));
   const milliseconds = Math.max(0, Math.floor((seconds - whole) * 1000));
@@ -147,7 +162,8 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
           ...reference,
           label: reference.filename,
           referenceAudio: true,
-          active: reference.referenceId === active?.referenceId
+          active: reference.referenceId === active?.referenceId,
+          ...referenceDeleteLinks(reference.referenceId)
         }))
       ],
       activeReferenceAudio: active

@@ -344,6 +344,74 @@ describe('gateway routes', () => {
     await app.close();
   });
 
+  it('deletes an uploaded Chatterbox WAV reference by descriptor delete URL', async () => {
+    const config = tempConfig();
+    const app = await buildApp({ config, sttClient: worker('stt'), ttsClient: worker('tts') });
+    const uploaded = await uploadReference(app, { setDefault: 'false' });
+
+    const before = await app.inject({ method: 'GET', url: '/voices' });
+    const uploadedDescriptor = before
+      .json()
+      .voices.find((voice: { referenceId?: string }) => voice.referenceId === uploaded.referenceId);
+    expect(uploadedDescriptor).toMatchObject({
+      referenceId: uploaded.referenceId,
+      canDelete: true,
+      deleteUrl: `/api/tts/reference-audio/${encodeURIComponent(uploaded.referenceId)}`
+    });
+
+    const response = await app.inject({ method: 'DELETE', url: uploadedDescriptor.deleteUrl });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, deleted: true, referenceId: uploaded.referenceId });
+    expect(existsSync(path.join(config.voiceDir, 'chatterbox', uploaded.referenceId))).toBe(false);
+
+    const after = await app.inject({ method: 'GET', url: '/voices' });
+    expect(after.json().voices.some((voice: { referenceId?: string }) => voice.referenceId === uploaded.referenceId)).toBe(false);
+    await app.close();
+  });
+
+  it('supports Bear Castle fallback DELETE /api/tts/reference-audio with a JSON id body and clears active state when needed', async () => {
+    const config = tempConfig();
+    const app = await buildApp({ config, sttClient: worker('stt'), ttsClient: worker('tts') });
+    const uploaded = await uploadReference(app, { setDefault: 'true' });
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/tts/reference-audio',
+      payload: { id: uploaded.referenceId }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      deleted: true,
+      referenceId: uploaded.referenceId,
+      activeReferenceCleared: true
+    });
+    expect(existsSync(path.join(config.voiceDir, 'chatterbox', uploaded.referenceId))).toBe(false);
+
+    const services = await app.inject({ method: 'GET', url: '/api/services/tts' });
+    expect(services.json()).toMatchObject({ activeReferenceAudio: null });
+    await app.close();
+  });
+
+  it('rejects unsafe reference delete ids without treating them as paths', async () => {
+    const config = tempConfig();
+    const app = await buildApp({ config, sttClient: worker('stt'), ttsClient: worker('tts') });
+    const uploaded = await uploadReference(app, { setDefault: 'false' });
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/api/tts/reference-audio',
+      payload: { id: '../outside.wav' }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/invalid referenceId/i);
+    expect(existsSync(path.join(config.voiceDir, 'chatterbox', uploaded.referenceId))).toBe(true);
+    await app.close();
+  });
+
   it('rejects non-WAV reference uploads with a clear 4xx response', async () => {
     const app = await buildApp({ config: tempConfig(), sttClient: worker('stt'), ttsClient: worker('tts') });
     const multipart = multipartPayload({

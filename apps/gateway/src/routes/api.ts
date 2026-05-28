@@ -10,12 +10,14 @@ import { recentLogs } from '../logs.js';
 import { fieldBoolean, saveUpload } from '../storage.js';
 import { systemOverview } from '../system.js';
 import {
+  deleteReferenceAudio,
   listReferenceAudio,
   publicActiveReference,
   resolveReferenceAudioId,
   resolveRequestedOrActiveReferenceId,
   saveReferenceAudio,
-  validateReferenceWavUpload
+  validateReferenceWavUpload,
+  ReferenceAudioError
 } from '../reference-audio.js';
 import type { WorkerClient } from '../worker-client.js';
 import {
@@ -51,6 +53,51 @@ async function maybeRestartWorker(config: AppConfig, role: ServiceRole): Promise
 
 function referenceIdFromSpeakRequest(request: { referenceId?: string; referenceAudioId?: string; voice?: string }): string | undefined {
   return request.referenceId ?? request.referenceAudioId ?? (request.voice?.endsWith('.wav') ? request.voice : undefined);
+}
+
+function referenceDeletePath(referenceId: string): string {
+  return `/api/tts/reference-audio/${encodeURIComponent(referenceId)}`;
+}
+
+function referenceDeleteLinks(
+  referenceId: string
+): { canDelete: true; deleteUrl: string; _links: { delete: { href: string; method: 'DELETE' } } } {
+  const deleteUrl = referenceDeletePath(referenceId);
+  return {
+    canDelete: true,
+    deleteUrl,
+    _links: { delete: { href: deleteUrl, method: 'DELETE' } }
+  };
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function referenceIdFromDeleteRequest(params: unknown, body: unknown): string {
+  const routeReferenceId = stringField((params as { referenceId?: unknown } | undefined)?.referenceId);
+  const payload = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  const referenceId =
+    routeReferenceId ??
+    stringField(payload.referenceId) ??
+    stringField(payload.referenceAudioId) ??
+    stringField(payload.reference_id) ??
+    stringField(payload.reference_audio_id) ??
+    stringField(payload.id) ??
+    stringField(payload.voice) ??
+    stringField(payload.storedFilename) ??
+    stringField(payload.stored_filename) ??
+    stringField(payload.filename);
+  if (!referenceId) {
+    throw new ReferenceAudioError(400, 'Missing referenceId for reference audio deletion.');
+  }
+  return referenceId;
+}
+
+function providerFromDeleteRequest(query: unknown, body: unknown, fallback: string): string {
+  const queryProvider = stringField((query as { provider?: unknown } | undefined)?.provider);
+  const payload = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  return queryProvider ?? stringField(payload.provider) ?? fallback;
 }
 
 export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDependencies): Promise<void> {
@@ -219,7 +266,60 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
         filename: saved.filename,
         contentType: saved.contentType,
         sizeBytes: saved.sizeBytes,
-        active: setDefault
+        active: setDefault,
+        ...referenceDeleteLinks(saved.referenceId)
+      };
+    } catch (error) {
+      sendError(reply, error);
+    }
+  });
+
+  app.delete('/api/tts/reference-audio/:referenceId', async (request, reply) => {
+    try {
+      const mutable = await configStore.read();
+      const provider = providerFromDeleteRequest(request.query, request.body, mutable.tts.provider);
+      const referenceId = referenceIdFromDeleteRequest(request.params, request.body);
+      const deleted = await deleteReferenceAudio(config, provider, referenceId);
+      const activeReferenceCleared = mutable.tts.activeReferenceId === deleted.referenceId;
+      if (activeReferenceCleared) {
+        await configStore.patchTts({ activeReferenceId: null, activeReference: null });
+      }
+      return {
+        ok: true,
+        deleted: true,
+        provider: deleted.provider,
+        referenceId: deleted.referenceId,
+        id: deleted.referenceId,
+        filename: deleted.filename,
+        contentType: deleted.contentType,
+        sizeBytes: deleted.sizeBytes,
+        activeReferenceCleared
+      };
+    } catch (error) {
+      sendError(reply, error);
+    }
+  });
+
+  app.delete('/api/tts/reference-audio', async (request, reply) => {
+    try {
+      const mutable = await configStore.read();
+      const provider = providerFromDeleteRequest(request.query, request.body, mutable.tts.provider);
+      const referenceId = referenceIdFromDeleteRequest(request.params, request.body);
+      const deleted = await deleteReferenceAudio(config, provider, referenceId);
+      const activeReferenceCleared = mutable.tts.activeReferenceId === deleted.referenceId;
+      if (activeReferenceCleared) {
+        await configStore.patchTts({ activeReferenceId: null, activeReference: null });
+      }
+      return {
+        ok: true,
+        deleted: true,
+        provider: deleted.provider,
+        referenceId: deleted.referenceId,
+        id: deleted.referenceId,
+        filename: deleted.filename,
+        contentType: deleted.contentType,
+        sizeBytes: deleted.sizeBytes,
+        activeReferenceCleared
       };
     } catch (error) {
       sendError(reply, error);
@@ -288,7 +388,8 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
           ...reference,
           label: reference.filename,
           referenceAudio: true,
-          active: reference.referenceId === active?.referenceId
+          active: reference.referenceId === active?.referenceId,
+          ...referenceDeleteLinks(reference.referenceId)
         }))
       ],
       activeReferenceAudio: active

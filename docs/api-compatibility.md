@@ -28,6 +28,7 @@ The previous VM baseline exposed a public API on port `8000` and a Chatterbox wo
 ## Compatibility notes
 
 - `/speak` accepts `text`, `voice`, `speed`, `exaggeration`, `cfg_weight`, `temperature`, `language`, and optional `reference_audio`.
+- Uploaded reference descriptors from `/voices` include a `deleteUrl`; orchestrators can delete uploaded Chatterbox references with `DELETE /api/tts/reference-audio/:referenceId` or `DELETE /api/tts/reference-audio` plus a JSON id body.
 - `/transcribe` returns legacy snake_case keys while `/api/stt/transcribe` returns modern camelCase keys.
 - `/v1/audio/transcriptions` returns OpenAI-style `{ "text": "..." }`, `verbose_json`, `text`, `srt`, or `vtt` responses based on `response_format`.
 - Default STT remains `large-v3-turbo`.

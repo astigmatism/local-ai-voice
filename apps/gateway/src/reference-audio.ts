@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { constants as fsConstants, promises as fs } from 'node:fs';
+import { constants as fsConstants, promises as fs, type Stats } from 'node:fs';
 import path from 'node:path';
 import type { TtsReferenceAudio } from '@local-ai-voice/shared';
 import type { AppConfig } from './config.js';
@@ -69,6 +69,48 @@ export function validateReferenceWavUpload(upload: UploadedAudio, maxUploadBytes
   }
 }
 
+export function normalizeReferenceAudioId(referenceId: string | undefined): string {
+  const trimmed = referenceId?.trim();
+  if (!trimmed || !referenceIdPattern.test(trimmed) || path.basename(trimmed) !== trimmed) {
+    throw new ReferenceAudioError(400, 'Invalid referenceId. Use the safe identifier returned by /api/tts/reference-audio.');
+  }
+  return trimmed;
+}
+
+function referenceDescriptorFromStat(provider: string, referenceId: string, stat: Stats): StoredReferenceAudio {
+  return {
+    provider,
+    referenceId,
+    id: referenceId,
+    filename: referenceId,
+    contentType: 'audio/wav',
+    sizeBytes: stat.size,
+    active: false,
+    createdAt: stat.birthtime.toISOString()
+  };
+}
+
+async function storedReferenceAudio(
+  config: AppConfig,
+  provider: string,
+  referenceId: string
+): Promise<{ filePath: string; reference: StoredReferenceAudio }> {
+  const normalizedProvider = normalizeReferenceProvider(provider);
+  const normalizedReferenceId = normalizeReferenceAudioId(referenceId);
+  const dir = providerVoiceDir(config, normalizedProvider);
+  const filePath = safeJoin(dir, normalizedReferenceId);
+  const stat = await fs.stat(filePath).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new ReferenceAudioError(404, `Reference audio not found: ${normalizedReferenceId}`);
+    }
+    throw error;
+  });
+  if (!stat.isFile()) {
+    throw new ReferenceAudioError(400, `Reference audio is not a regular file: ${normalizedReferenceId}`);
+  }
+  return { filePath, reference: referenceDescriptorFromStat(normalizedProvider, normalizedReferenceId, stat) };
+}
+
 export async function saveReferenceAudio(
   config: AppConfig,
   upload: UploadedAudio,
@@ -95,6 +137,21 @@ export async function saveReferenceAudio(
   };
 }
 
+export async function deleteReferenceAudio(
+  config: AppConfig,
+  provider: string,
+  referenceId: string
+): Promise<StoredReferenceAudio> {
+  const { filePath, reference } = await storedReferenceAudio(config, provider, referenceId);
+  await fs.unlink(filePath).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new ReferenceAudioError(404, `Reference audio not found: ${reference.referenceId}`);
+    }
+    throw error;
+  });
+  return reference;
+}
+
 export function publicActiveReference(
   mutable: MutableApplianceConfig
 ): TtsReferenceAudio | null {
@@ -113,16 +170,7 @@ export async function listReferenceAudio(config: AppConfig, provider = 'chatterb
     if (!entry.isFile() || !referenceIdPattern.test(entry.name)) continue;
     const filePath = safeJoin(dir, entry.name);
     const stat = await fs.stat(filePath);
-    voices.push({
-      provider: normalizedProvider,
-      referenceId: entry.name,
-      id: entry.name,
-      filename: entry.name,
-      contentType: 'audio/wav',
-      sizeBytes: stat.size,
-      active: false,
-      createdAt: stat.birthtime.toISOString()
-    });
+    voices.push(referenceDescriptorFromStat(normalizedProvider, entry.name, stat));
   }
   return voices.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
@@ -133,22 +181,8 @@ export async function resolveReferenceAudioId(
   referenceId: string | undefined
 ): Promise<string | undefined> {
   if (!referenceId) return undefined;
-  const trimmed = referenceId.trim();
-  if (!referenceIdPattern.test(trimmed) || path.basename(trimmed) !== trimmed) {
-    throw new ReferenceAudioError(400, 'Invalid referenceId. Use the safe identifier returned by /api/tts/reference-audio.');
-  }
-  const normalizedProvider = normalizeReferenceProvider(provider);
-  const dir = providerVoiceDir(config, normalizedProvider);
-  const filePath = safeJoin(dir, trimmed);
-  const stat = await fs.stat(filePath).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new ReferenceAudioError(404, `Reference audio not found: ${trimmed}`);
-    }
-    throw error;
-  });
-  if (!stat.isFile()) {
-    throw new ReferenceAudioError(400, `Reference audio is not a regular file: ${trimmed}`);
-  }
+  const trimmed = normalizeReferenceAudioId(referenceId);
+  const { filePath } = await storedReferenceAudio(config, provider, trimmed);
   await fs.access(filePath, fsConstants.R_OK);
   const handle = await fs.open(filePath, 'r');
   try {
