@@ -89,3 +89,9 @@ Do not over-harden with device isolation unless you verify `/dev/nvidia*` remain
 ## Backups and data classification
 
 Reference voices can be sensitive biometric-adjacent data. Back them up only to trusted encrypted storage and document retention policies.
+
+## Security notes for private worker ports
+
+The public API and portal belong on the gateway port only. Chatterbox (`127.0.0.1:8001`), STT (`127.0.0.1:8002` when installed), and Kokoro (`127.0.0.1:8003`) should remain localhost-bound private services. External orchestration should choose TTS providers through the gateway by sending `provider:"chatterbox"` or `provider:"kokoro"`; it should not expose worker ports directly.
+
+Reference WAV upload remains Chatterbox-specific. Kokoro uses built-in voice ids and should reject reference audio fields.

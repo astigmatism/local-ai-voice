@@ -28,6 +28,8 @@ export interface GpuStatus {
 
 export interface WorkerHealth {
   ok: boolean;
+  /** True when the gateway reached the worker HTTP endpoint. False means routing can continue to other providers. */
+  reachable?: boolean;
   role: ServiceRole;
   provider: string;
   state: LoadState;
@@ -158,9 +160,20 @@ export interface ConfigView {
   defaults: {
     sttProvider: string;
     sttModel: string;
+    /** Default TTS provider used only when a speak request omits provider. */
     ttsProvider: string;
     ttsModel: string;
   };
+  ttsProviders?: Record<
+    string,
+    {
+      enabled: boolean;
+      workerUrl: string;
+      defaultModel: string;
+      defaultVoice?: string;
+      autoLoad: boolean;
+    }
+  >;
   paths: {
     baseDir: string;
     configDir: string;

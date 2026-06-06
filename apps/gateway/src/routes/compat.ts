@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { TranscriptResponse, VoiceDescriptor } from '@local-ai-voice/shared';
 import { builtInVoices, providerSupportsReferenceAudio, sttCatalog, ttsCatalog } from '../catalog.js';
 import type { AppConfig } from '../config.js';
-import type { ConfigStore } from '../config-store.js';
+import type { ConfigStore, MutableApplianceConfig } from '../config-store.js';
 import { getGpuStatus } from '../gpu.js';
 import { saveUpload } from '../storage.js';
 import {
@@ -11,7 +11,7 @@ import {
   resolveRequestedOrActiveReferenceId,
   validateReferenceWavUpload
 } from '../reference-audio.js';
-import type { TtsProviderRegistry } from '../tts-providers.js';
+import type { TtsProviderId, TtsProviderRegistry } from '../tts-providers.js';
 import type { WorkerClient } from '../worker-client.js';
 import {
   getFirstFile,
@@ -92,6 +92,23 @@ async function voicesForProvider(
     }
   }
   return [...byId.values()];
+}
+
+
+function providerConfig(mutable: MutableApplianceConfig, provider: TtsProviderId) {
+  return mutable.tts.providers?.[provider];
+}
+
+function defaultModelForSpeak(ttsProviders: TtsProviderRegistry, provider: TtsProviderId, mutable: MutableApplianceConfig): string {
+  return providerConfig(mutable, provider)?.defaultModel ?? (provider === mutable.tts.provider ? mutable.tts.defaultModel : ttsProviders.defaultModel(provider));
+}
+
+function defaultLanguageForSpeak(ttsProviders: TtsProviderRegistry, provider: TtsProviderId, mutable: MutableApplianceConfig): string {
+  return providerConfig(mutable, provider)?.language ?? (provider === mutable.tts.provider ? mutable.tts.language : ttsProviders.defaultLanguage(provider));
+}
+
+function defaultVoiceForSpeak(ttsProviders: TtsProviderRegistry, provider: TtsProviderId, mutable: MutableApplianceConfig): string | undefined {
+  return providerConfig(mutable, provider)?.defaultVoice ?? ttsProviders.defaultVoice(provider);
 }
 
 function timestamp(seconds: number, decimalSeparator: ',' | '.'): string {
@@ -203,7 +220,7 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
   app.get('/voices', async (request) => {
     const mutable = await configStore.read();
     const provider = ttsProviders.resolveProvider(queryProvider(request.query), undefined, mutable.tts.provider);
-    const active = provider === mutable.tts.provider ? publicActiveReference(mutable) : null;
+    const active = publicActiveReference(mutable, provider);
     return {
       provider,
       voices: await voicesForProvider(config, ttsProviders, provider, active?.referenceId),
@@ -218,10 +235,10 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
 
   app.get('/voice/default', async () => {
     const mutable = await configStore.read();
-    const active = publicActiveReference(mutable);
     const provider = ttsProviders.resolveProvider(undefined, mutable.tts.defaultModel, mutable.tts.provider);
+    const active = publicActiveReference(mutable, provider);
     return {
-      default_voice: active?.referenceId ?? ttsProviders.defaultVoice(provider) ?? 'reference-upload',
+      default_voice: active?.referenceId ?? defaultVoiceForSpeak(ttsProviders, provider, mutable) ?? 'reference-upload',
       provider,
       model: mutable.tts.defaultModel,
       activeReferenceAudio: active
@@ -252,9 +269,9 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
       speakRequest = {
         ...speakRequest,
         provider,
-        model: speakRequest.model ?? (provider === mutable.tts.provider ? mutable.tts.defaultModel : ttsProviders.defaultModel(provider)),
-        language: speakRequest.language ?? (provider === mutable.tts.provider ? mutable.tts.language : config.defaultTtsLanguage),
-        voice: speakRequest.voice ?? ttsProviders.defaultVoice(provider)
+        model: speakRequest.model ?? defaultModelForSpeak(ttsProviders, provider, mutable),
+        language: speakRequest.language ?? defaultLanguageForSpeak(ttsProviders, provider, mutable),
+        voice: speakRequest.voice ?? defaultVoiceForSpeak(ttsProviders, provider, mutable)
       };
       if (!referenceAudio && providerSupportsReferenceAudio(provider)) {
         const resolvedReferenceId = await resolveRequestedOrActiveReferenceId(config, mutable, requestedReferenceId, provider);

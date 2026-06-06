@@ -11,6 +11,8 @@ export interface TtsProviderView {
   id: string;
   role: 'tts';
   label: string;
+  name?: string;
+  displayName?: string;
   workerUrl: string;
   systemdService: string;
   defaultModel: string;
@@ -18,6 +20,17 @@ export interface TtsProviderView {
   supportsReferenceAudio: boolean;
   supportsVoiceCloning: boolean;
   supportsLanguageSelection: boolean;
+  enabled?: boolean;
+  active?: boolean;
+  reachable?: boolean;
+  state?: string;
+  model?: string | null;
+  loadedModel?: string | null;
+  voice?: string | null;
+  language?: string;
+  workerPort?: number;
+  capabilities?: Record<string, boolean>;
+  activeReferenceAudio?: TtsReferenceAudio | null;
   models: string[];
   voices: VoiceDescriptor[];
   health?: WorkerHealth;
@@ -39,6 +52,14 @@ export interface ModelsResponse {
   stt: ModelDescriptor[];
   tts: ModelDescriptor[];
   ttsProviders?: TtsProviderView[];
+}
+
+export interface ServicesTtsResponse {
+  ok: boolean;
+  defaultProvider: string;
+  selectedProvider: string;
+  provider: string;
+  providers: TtsProviderView[];
 }
 
 export interface VoicesResponse {
@@ -64,6 +85,18 @@ export type ConfigResponse = ConfigView & {
       language?: string;
       activeReferenceId?: string | null;
       activeReference?: TtsReferenceAudio | null;
+      providers?: Record<
+        string,
+        {
+          enabled?: boolean;
+          defaultModel?: string;
+          defaultVoice?: string;
+          language?: string;
+          autoLoad?: boolean;
+          activeReferenceId?: string | null;
+          activeReference?: TtsReferenceAudio | null;
+        }
+      >;
     };
     [key: string]: unknown;
   };
@@ -141,6 +174,7 @@ export const api = {
   system: () => getJson<Record<string, unknown>>('/api/system'),
   models: () => getJson<ModelsResponse>('/api/models'),
   config: () => getJson<ConfigResponse>('/api/config'),
+  ttsServices: () => getJson<ServicesTtsResponse>('/api/services/tts'),
   logs: () => getJson<LogsResponse>('/api/logs?limit=120'),
   voices: (provider: string) => getJson<VoicesResponse>(`/api/voices?provider=${encodeURIComponent(provider)}`),
   speak: (payload: SpeakPayload) => postAudio('/api/tts/speak', payload),
@@ -150,6 +184,8 @@ export const api = {
     postJson('/api/models/tts/load', { provider, model, language }),
   unloadTts: (provider: string, strategy: 'soft' | 'hard') =>
     postJson('/api/models/tts/unload', { provider, strategy, clearCache: true }),
+  reloadTts: (provider: string, model: string, language: string) =>
+    postJson('/api/models/tts/reload', { provider, model, language }),
   patchSttDefault: (defaultModel: string) => patchJson('/api/config/stt', { defaultModel }),
   patchTtsDefault: (provider: string, defaultModel: string, language: string) =>
     patchJson('/api/config/tts', { provider, defaultModel, language }),

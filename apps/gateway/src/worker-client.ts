@@ -17,6 +17,27 @@ export interface WorkerClientOptions {
   timeoutMs: number;
 }
 
+export class WorkerClientError extends Error {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+    public readonly workerStatus?: number
+  ) {
+    super(message);
+  }
+}
+
+function statusForWorkerResponse(workerStatus: number): number {
+  if (workerStatus === 409) return 503;
+  if (workerStatus >= 500) return 502;
+  return workerStatus;
+}
+
+function messageFromFetchError(error: unknown): string {
+  if (error instanceof DOMException && error.name === 'AbortError') return 'Worker request timed out.';
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class WorkerClient {
   private readonly role: ServiceRole;
   private readonly provider: string;
@@ -39,8 +60,12 @@ export class WorkerClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const response = await fetch(this.url(pathname), { ...init, signal: controller.signal });
-      return response;
+      return await fetch(this.url(pathname), { ...init, signal: controller.signal });
+    } catch (error) {
+      throw new WorkerClientError(
+        503,
+        `${this.provider} ${this.role} worker is unavailable at ${this.baseUrl.origin}: ${messageFromFetchError(error)}`
+      );
     } finally {
       clearTimeout(timeout);
     }
@@ -50,17 +75,23 @@ export class WorkerClient {
     const response = await this.request(pathname, init);
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(`Worker ${this.role} ${pathname} failed: ${response.status} ${body}`);
+      throw new WorkerClientError(
+        statusForWorkerResponse(response.status),
+        `Worker ${this.role} ${this.provider} ${pathname} failed: ${response.status} ${body}`,
+        response.status
+      );
     }
     return (await response.json()) as T;
   }
 
   async health(): Promise<WorkerHealth> {
     try {
-      return await this.json<WorkerHealth>('/health');
+      const health = await this.json<WorkerHealth>('/health');
+      return { ...health, provider: health.provider ?? this.provider, reachable: true };
     } catch (error) {
       return {
         ok: false,
+        reachable: false,
         role: this.role,
         provider: this.provider,
         state: 'failed',
@@ -85,6 +116,14 @@ export class WorkerClient {
 
   async unloadModel(payload: UnloadModelRequest): Promise<ModelStatus> {
     return await this.json<ModelStatus>('/model/unload', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  }
+
+  async reloadModel(payload: LoadModelRequest): Promise<ModelStatus> {
+    return await this.json<ModelStatus>('/model/reload', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload)
@@ -130,7 +169,11 @@ export class WorkerClient {
     const response = await this.request('/speak', { method: 'POST', body: form });
     if (!response.ok) {
       const body = await response.text().catch(() => '');
-      throw new Error(`TTS worker speak failed: ${response.status} ${body}`);
+      throw new WorkerClientError(
+        statusForWorkerResponse(response.status),
+        `TTS worker ${this.provider} speak failed: ${response.status} ${body}`,
+        response.status
+      );
     }
     return response;
   }

@@ -413,3 +413,54 @@ Returns recent file log entries from `/opt/local-ai-voice/logs`. Systemd journal
 ## Worker-only private API
 
 Workers implement the private contract documented in `docs/architecture.md`. Do not expose worker ports publicly.
+
+## Concurrent TTS provider API
+
+`GET /api/services/tts` returns both Chatterbox and Kokoro provider states in one response. The top-level `defaultProvider` is the fallback provider used only when a speech request omits `provider`.
+
+```bash
+curl -f http://127.0.0.1:8000/api/services/tts | jq .
+```
+
+The response includes a `providers` array with independent `id`, `workerUrl`, `workerPort`, `reachable`, `state`, `loadedModel`, `defaultModel`, `voice`, `language`, and `capabilities` fields for each provider.
+
+Speech generation accepts an explicit provider per request:
+
+```bash
+curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"chatterbox","text":"This is Chatterbox."}' \
+  --output chatterbox.wav
+
+curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"kokoro","text":"This is Kokoro.","voice":"af_heart","language":"a"}' \
+  --output kokoro.wav
+```
+
+The compatibility route also accepts `provider` without changing the default:
+
+```bash
+curl -f -X POST http://127.0.0.1:8000/speak \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"kokoro","text":"Compatibility route using Kokoro.","voice":"af_heart"}' \
+  --output kokoro-compat.wav
+```
+
+Lifecycle controls are independent:
+
+```bash
+curl -f -X POST http://127.0.0.1:8000/api/models/tts/load \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"chatterbox","model":"chatterbox-turbo","language":"en"}' | jq .
+
+curl -f -X POST http://127.0.0.1:8000/api/models/tts/reload \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"kokoro","model":"kokoro-82m","language":"a"}' | jq .
+
+curl -f -X POST http://127.0.0.1:8000/api/models/tts/unload \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"kokoro","strategy":"soft"}' | jq .
+```
+
+Unknown providers return `400`. A selected worker that cannot be reached returns `503`. Worker validation errors are surfaced as `4xx`; worker inference failures are surfaced as gateway/provider errors such as `502`.

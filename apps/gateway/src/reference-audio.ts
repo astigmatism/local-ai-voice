@@ -153,11 +153,15 @@ export async function deleteReferenceAudio(
 }
 
 export function publicActiveReference(
-  mutable: MutableApplianceConfig
+  mutable: MutableApplianceConfig,
+  providerOverride?: string
 ): TtsReferenceAudio | null {
-  const active = mutable.tts.activeReference;
-  if (!active || active.referenceId !== mutable.tts.activeReferenceId) return null;
-  if (active.provider !== mutable.tts.provider) return null;
+  const provider = providerOverride ?? mutable.tts.provider;
+  const providerConfig = provider === 'chatterbox' || provider === 'kokoro' ? mutable.tts.providers?.[provider] : undefined;
+  const active = providerConfig?.activeReference ?? mutable.tts.activeReference;
+  const activeReferenceId = providerConfig?.activeReferenceId ?? mutable.tts.activeReferenceId;
+  if (!active || active.referenceId !== activeReferenceId) return null;
+  if (active.provider !== provider) return null;
   return { ...active, active: true };
 }
 
@@ -205,7 +209,9 @@ export async function resolveRequestedOrActiveReferenceId(
   providerOverride?: string
 ): Promise<string | undefined> {
   const provider = providerOverride || mutable.tts.provider || config.defaultTtsProvider;
-  const activeReferenceId = mutable.tts.activeReference?.provider === provider ? mutable.tts.activeReferenceId : undefined;
+  const providerConfig = provider === 'chatterbox' || provider === 'kokoro' ? mutable.tts.providers?.[provider] : undefined;
+  const activeReference = providerConfig?.activeReference ?? mutable.tts.activeReference;
+  const activeReferenceId = activeReference?.provider === provider ? providerConfig?.activeReferenceId ?? mutable.tts.activeReferenceId : undefined;
   const selected = requestedReferenceId || activeReferenceId || undefined;
   return await resolveReferenceAudioId(config, provider, selected);
 }

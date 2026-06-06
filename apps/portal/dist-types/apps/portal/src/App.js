@@ -24,11 +24,15 @@ function GpuCard({ gpu }) {
 function ServiceCard({ title, health }) {
     return (_jsxs("section", { className: "card", children: [_jsxs("div", { className: "card-title", children: [_jsx("h2", { children: title }), health ? _jsx(StatusPill, { ok: health.ok, label: health.state }) : _jsx(StatusPill, { ok: false, label: "unknown" })] }), health ? (_jsxs("div", { className: "kv", children: [_jsx("span", { children: "Provider" }), _jsx("strong", { children: health.provider }), _jsx("span", { children: "Loaded model" }), _jsx("strong", { children: health.loadedModel ?? 'none' }), _jsx("span", { children: "GPU only" }), _jsx("strong", { children: String(health.gpuOnly) }), _jsx("span", { children: "GPU visible to worker" }), _jsx("strong", { children: String(health.gpuAvailable) }), health.error && (_jsxs(_Fragment, { children: [_jsx("span", { children: "Error" }), _jsx("strong", { className: "error", children: health.error })] }))] })) : (_jsx("p", { children: "Loading..." }))] }));
 }
-function TtsProviderStatus({ health }) {
-    const providers = health?.ttsProviders ?? [];
-    return (_jsxs("section", { className: "card", children: [_jsx("h2", { children: "TTS providers" }), providers.length === 0 ? (_jsx("p", { className: "hint", children: "Provider status will appear after the gateway refreshes." })) : (_jsx("div", { className: "provider-list", children: providers.map((provider) => (_jsxs("div", { className: "provider-row", children: [_jsxs("div", { children: [_jsx("strong", { children: provider.label }), _jsx("span", { children: provider.id })] }), _jsx(StatusPill, { ok: Boolean(provider.health?.ok), label: provider.health?.state ?? 'unknown' })] }, provider.id))) }))] }));
+function ProviderCapabilityList({ provider }) {
+    const capabilities = provider.capabilities ?? { referenceAudio: provider.supportsReferenceAudio };
+    return (_jsxs("span", { className: "hint", children: [capabilities.referenceAudio ? 'reference WAV' : 'built-in voices', ";", capabilities['languageSelection'] ? ' language selection' : ' fixed language', "; speed control"] }));
 }
-function ModelPicker({ role, models, onLoad, onUnload, onSetDefault }) {
+export function TtsProviderStatus({ health }) {
+    const providers = health?.ttsProviders ?? [];
+    return (_jsxs("section", { className: "card wide", children: [_jsx("h2", { children: "Concurrent TTS providers" }), providers.length === 0 ? (_jsx("p", { className: "hint", children: "Provider status will appear after the gateway refreshes." })) : (_jsx("div", { className: "provider-grid", children: providers.map((provider) => (_jsxs("div", { className: "provider-panel", children: [_jsxs("div", { className: "provider-row", children: [_jsxs("div", { children: [_jsx("strong", { children: provider.displayName ?? provider.label }), _jsx("span", { children: provider.workerUrl })] }), _jsx(StatusPill, { ok: Boolean(provider.reachable ?? provider.health?.reachable ?? provider.health?.ok), label: provider.state ?? provider.health?.state ?? 'unknown' })] }), _jsxs("div", { className: "kv compact", children: [_jsx("span", { children: "Enabled" }), _jsx("strong", { children: String(provider.enabled ?? provider.active ?? true) }), _jsx("span", { children: "Loaded model" }), _jsx("strong", { children: provider.loadedModel ?? provider.model ?? provider.health?.loadedModel ?? 'none' }), _jsx("span", { children: "Default model" }), _jsx("strong", { children: provider.defaultModel }), _jsx("span", { children: "Default voice" }), _jsx("strong", { children: provider.voice ?? provider.defaultVoice ?? 'none' }), _jsx("span", { children: "Worker port" }), _jsx("strong", { children: provider.workerPort ?? 'unknown' })] }), _jsx(ProviderCapabilityList, { provider: provider }), provider.health?.error && _jsx("p", { className: "error", children: provider.health.error })] }, provider.id))) }))] }));
+}
+function ModelPicker({ role, models, onLoad, onUnload, onReload, onSetDefault }) {
     const defaultKey = models[0] ? modelKey(models[0]) : '';
     const [selectedKey, setSelectedKey] = useState(defaultKey);
     const [language, setLanguage] = useState('en');
@@ -47,7 +51,7 @@ function ModelPicker({ role, models, onLoad, onUnload, onSetDefault }) {
             setBusy(false);
         }
     }
-    return (_jsxs("section", { className: "card", children: [_jsxs("h2", { children: [role, " model control"] }), _jsxs("label", { children: ["Model", _jsx("select", { value: selected ? modelKey(selected) : '', onChange: (event) => setSelectedKey(event.target.value), children: models.map((candidate) => (_jsxs("option", { value: modelKey(candidate), children: [candidate.label, " (", candidate.provider, ")"] }, modelKey(candidate)))) })] }), role === 'TTS' && (_jsxs("label", { children: ["Language", _jsx("input", { value: language, onChange: (event) => setLanguage(event.target.value), placeholder: "en or a" })] })), _jsxs("div", { className: "actions", children: [_jsx("button", { disabled: busy || !selected, onClick: () => selected && void run(() => onLoad(selected.provider, selected.id, language)), children: "Load" }), _jsx("button", { disabled: busy || !selected, onClick: () => selected && void run(() => onUnload(selected.provider, 'soft')), children: "Soft unload" }), _jsx("button", { disabled: busy || !selected, onClick: () => selected && void run(() => onUnload(selected.provider, 'hard')), children: "Hard restart" }), _jsx("button", { disabled: busy || !selected, onClick: () => selected && void run(() => onSetDefault(selected.provider, selected.id, language)), children: "Set default" })] }), selected && (_jsxs("p", { className: "hint", children: [selected.description, " Approx VRAM: ", selected.approximateVramMiB ? `${selected.approximateVramMiB} MiB` : 'unknown', ".", selected.supportsReferenceAudio ? ' Supports reference WAV.' : ' Uses built-in voices.'] }))] }));
+    return (_jsxs("section", { className: "card", children: [_jsxs("h2", { children: [role, " model control"] }), _jsxs("label", { children: ["Model", _jsx("select", { value: selected ? modelKey(selected) : '', onChange: (event) => setSelectedKey(event.target.value), children: models.map((candidate) => (_jsxs("option", { value: modelKey(candidate), children: [candidate.label, " (", candidate.provider, ")"] }, modelKey(candidate)))) })] }), role === 'TTS' && (_jsxs("label", { children: ["Language", _jsx("input", { value: language, onChange: (event) => setLanguage(event.target.value), placeholder: "en or a" })] })), _jsxs("div", { className: "actions", children: [_jsx("button", { disabled: busy || !selected, onClick: () => selected && void run(() => onLoad(selected.provider, selected.id, language)), children: "Load" }), _jsx("button", { disabled: busy || !selected, onClick: () => selected && void run(() => onUnload(selected.provider, 'soft')), children: "Soft unload" }), role === 'TTS' && (_jsx("button", { disabled: busy || !selected || !onReload, onClick: () => selected && onReload && void run(() => onReload(selected.provider, selected.id, language)), children: "Reload" })), _jsx("button", { disabled: busy || !selected, onClick: () => selected && void run(() => onUnload(selected.provider, 'hard')), children: "Hard restart" }), _jsx("button", { disabled: busy || !selected, onClick: () => selected && void run(() => onSetDefault(selected.provider, selected.id, language)), children: "Set default" })] }), selected && (_jsxs("p", { className: "hint", children: [selected.description, " Approx VRAM: ", selected.approximateVramMiB ? `${selected.approximateVramMiB} MiB` : 'unknown', ".", selected.supportsReferenceAudio ? ' Supports reference WAV.' : ' Uses built-in voices.'] }))] }));
 }
 function StorageCard({ system }) {
     const disks = Array.isArray(system?.disks) ? system.disks : [];
@@ -95,8 +99,9 @@ function preferredVoice(provider, voices, activeReference) {
 }
 function TtsSpeakCard({ models, configView }) {
     const configuredProvider = configView?.mutable.tts?.provider ?? 'chatterbox';
-    const configuredModel = configView?.mutable.tts?.defaultModel;
-    const configuredLanguage = configView?.mutable.tts?.language ?? 'en';
+    const providerDefaults = configView?.mutable.tts?.providers ?? {};
+    const configuredModel = providerDefaults[configuredProvider]?.defaultModel ?? configView?.mutable.tts?.defaultModel;
+    const configuredLanguage = providerDefaults[configuredProvider]?.language ?? configView?.mutable.tts?.language ?? 'en';
     const providers = useMemo(() => [...new Set(models.map((model) => model.provider))], [models]);
     const [provider, setProvider] = useState(configuredProvider);
     const providerModels = models.filter((model) => model.provider === provider);
@@ -117,13 +122,13 @@ function TtsSpeakCard({ models, configView }) {
     useEffect(() => {
         const modelsForProvider = models.filter((candidate) => candidate.provider === provider);
         if (!modelsForProvider.some((candidate) => candidate.id === model)) {
-            const configured = provider === configuredProvider ? configuredModel : undefined;
+            const configured = providerDefaults[provider]?.defaultModel ?? (provider === configuredProvider ? configuredModel : undefined);
             setModel(configured ?? modelsForProvider[0]?.id ?? '');
         }
-    }, [configuredModel, configuredProvider, model, models, provider]);
+    }, [configuredModel, configuredProvider, model, models, provider, providerDefaults]);
     useEffect(() => {
-        setLanguage(provider === configuredProvider ? configuredLanguage : provider === 'kokoro' ? 'a' : 'en');
-    }, [configuredLanguage, configuredProvider, provider]);
+        setLanguage(providerDefaults[provider]?.language ?? (provider === configuredProvider ? configuredLanguage : provider === 'kokoro' ? 'a' : 'en'));
+    }, [configuredLanguage, configuredProvider, provider, providerDefaults]);
     useEffect(() => {
         let active = true;
         api
@@ -211,11 +216,15 @@ export function App() {
         return () => window.clearInterval(interval);
     }, [refresh]);
     const applianceOk = useMemo(() => Boolean(health?.ok), [health]);
-    const activeReference = configView?.mutable.tts?.activeReference ?? health?.services.tts.activeReferenceAudio ?? null;
+    const activeReference = configView?.mutable.tts?.providers?.chatterbox?.activeReference ??
+        configView?.mutable.tts?.activeReference ??
+        health?.ttsProviders?.find((provider) => provider.id === 'chatterbox')?.activeReferenceAudio ??
+        health?.services.tts.activeReferenceAudio ??
+        null;
     async function withRefresh(action) {
         await action;
         await refresh();
     }
-    return (_jsxs("main", { children: [_jsxs("header", { className: "hero", children: [_jsxs("div", { children: [_jsx("p", { className: "eyebrow", children: "Local AI Voice Appliance" }), _jsx("h1", { children: "GPU-first STT/TTS manager" }), _jsx("p", { children: "Gateway, portal, and localhost Python workers for swappable speech-to-text and text-to-speech models." })] }), _jsxs("div", { className: "hero-actions", children: [_jsx(StatusPill, { ok: applianceOk, label: applianceOk ? 'healthy' : 'degraded' }), _jsx("button", { onClick: () => void refresh(), children: "Refresh" }), _jsx("a", { href: "/api/docs", children: "API docs" })] })] }), error && _jsx("section", { className: "banner error", children: error }), _jsxs("p", { className: "updated", children: ["Last updated: ", lastUpdated] }), _jsxs("div", { className: "grid", children: [_jsx(GpuCard, { gpu: health?.gpu }), _jsx(ServiceCard, { title: "Speech to text", health: health?.services.stt }), _jsx(ServiceCard, { title: "Text to speech", health: health?.services.tts }), _jsx(TtsProviderStatus, { health: health }), _jsx(ModelPicker, { role: "STT", models: models.stt, onLoad: (_provider, model) => withRefresh(api.loadStt(model)), onUnload: (_provider, strategy) => withRefresh(api.unloadStt(strategy)), onSetDefault: (_provider, model) => withRefresh(api.patchSttDefault(model)) }), _jsx(ModelPicker, { role: "TTS", models: models.tts, onLoad: (provider, model, language) => withRefresh(api.loadTts(provider, model, language)), onUnload: (provider, strategy) => withRefresh(api.unloadTts(provider, strategy)), onSetDefault: (provider, model, language) => withRefresh(api.patchTtsDefault(provider, model, language)) }), _jsx(TtsSpeakCard, { models: models.tts, configView: configView }), _jsx(ReferenceUpload, { activeReference: activeReference, onUploaded: refresh }), _jsx(StorageCard, { system: system }), _jsx(LogsCard, { logs: logs })] })] }));
+    return (_jsxs("main", { children: [_jsxs("header", { className: "hero", children: [_jsxs("div", { children: [_jsx("p", { className: "eyebrow", children: "Local AI Voice Appliance" }), _jsx("h1", { children: "GPU-first STT/TTS manager" }), _jsx("p", { children: "Gateway, portal, and localhost Python workers for swappable speech-to-text and text-to-speech models." })] }), _jsxs("div", { className: "hero-actions", children: [_jsx(StatusPill, { ok: applianceOk, label: applianceOk ? 'healthy' : 'degraded' }), _jsx("button", { onClick: () => void refresh(), children: "Refresh" }), _jsx("a", { href: "/api/docs", children: "API docs" })] })] }), error && _jsx("section", { className: "banner error", children: error }), _jsxs("p", { className: "updated", children: ["Last updated: ", lastUpdated] }), _jsxs("div", { className: "grid", children: [_jsx(GpuCard, { gpu: health?.gpu }), _jsx(ServiceCard, { title: "Speech to text", health: health?.services.stt }), _jsx(ServiceCard, { title: "Text to speech", health: health?.services.tts }), _jsx(TtsProviderStatus, { health: health }), _jsx(ModelPicker, { role: "STT", models: models.stt, onLoad: (_provider, model) => withRefresh(api.loadStt(model)), onUnload: (_provider, strategy) => withRefresh(api.unloadStt(strategy)), onSetDefault: (_provider, model) => withRefresh(api.patchSttDefault(model)) }), _jsx(ModelPicker, { role: "TTS", models: models.tts, onLoad: (provider, model, language) => withRefresh(api.loadTts(provider, model, language)), onUnload: (provider, strategy) => withRefresh(api.unloadTts(provider, strategy)), onReload: (provider, model, language) => withRefresh(api.reloadTts(provider, model, language)), onSetDefault: (provider, model, language) => withRefresh(api.patchTtsDefault(provider, model, language)) }), _jsx(TtsSpeakCard, { models: models.tts, configView: configView }), _jsx(ReferenceUpload, { activeReference: activeReference, onUploaded: refresh }), _jsx(StorageCard, { system: system }), _jsx(LogsCard, { logs: logs })] })] }));
 }
 //# sourceMappingURL=App.js.map

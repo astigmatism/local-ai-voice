@@ -12,6 +12,8 @@ WorkingDirectory=/opt/local-ai-voice/app/workers/tts-kokoro
 EnvironmentFile=/opt/local-ai-voice/config/local-ai-voice.env
 EnvironmentFile=-/opt/local-ai-voice/config/worker-libs.env
 Environment=TTS_PROVIDER=kokoro
+Environment=TTS_KOKORO_BIND_HOST=127.0.0.1
+Environment=TTS_KOKORO_BIND_PORT=8003
 Environment=TTS_BIND_HOST=127.0.0.1
 Environment=TTS_BIND_PORT=8003
 ExecStart=/opt/local-ai-voice/workers/tts-kokoro/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8003 --log-level info

@@ -205,3 +205,27 @@ If you have already moved the STT worker to localhost-only, restore the previous
 - A 10 GB VRAM GPU is useful but not unlimited. Do not expect STT large models and TTS models to remain resident together in all precision/settings combinations.
 - ESXi direct passthrough behavior varies by GPU. Some consumer GPUs reset poorly after VM reboot and may require host reboot.
 - This package does not include model weights, virtualenvs, `node_modules`, caches, generated audio, or secrets.
+
+## Concurrent Chatterbox and Kokoro TTS
+
+Chatterbox and Kokoro are independent TTS providers. `TTS_DEFAULT_PROVIDER` is only the fallback used when `/api/tts/speak` or `/speak` omits `provider`; changing it does not unload the other provider. The gateway keeps a provider-keyed registry with separate worker URL, health, model state, default model, default voice, capabilities, and lifecycle controls for each provider.
+
+```bash
+curl -f http://127.0.0.1:8000/api/services/tts | jq .
+curl -f http://127.0.0.1:8001/health | jq .
+curl -f http://127.0.0.1:8003/health | jq .
+
+curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"chatterbox","text":"This is Chatterbox."}' \
+  --output chatterbox.wav
+
+curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"kokoro","text":"This is Kokoro.","voice":"af_heart","language":"a"}' \
+  --output kokoro.wav
+
+sudo ss -ltnp | grep -E ':8000|:8001|:8002|:8003'
+```
+
+Expected listening layout is `0.0.0.0:8000` for the public gateway, `127.0.0.1:8001` for Chatterbox, `127.0.0.1:8002` for STT when installed, and `127.0.0.1:8003` for Kokoro. Load, unload, and reload calls include `provider` and affect only that worker; the gateway never silently unloads the non-selected TTS provider to make room for the selected one.

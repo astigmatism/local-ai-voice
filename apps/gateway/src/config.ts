@@ -33,9 +33,15 @@ export interface AppConfig {
   defaultSttDevice: string;
   defaultTtsProvider: string;
   defaultTtsModel: string;
+  defaultTtsVoice: string;
   defaultTtsLanguage: string;
+  ttsChatterboxEnabled: boolean;
+  ttsChatterboxAutoload: boolean;
+  ttsKokoroEnabled: boolean;
   kokoroDefaultTtsModel: string;
   kokoroDefaultTtsVoice: string;
+  kokoroDefaultTtsLanguage: string;
+  ttsKokoroAutoload: boolean;
   maxUploadBytes: number;
   generatedRetentionHours: number;
   authEnabled: boolean;
@@ -54,14 +60,24 @@ const boolFromEnv = (value: string | undefined, fallback: boolean): boolean => {
   return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
 };
 
+const firstEnv = (env: NodeJS.ProcessEnv, names: string[], fallback: string): string => {
+  for (const name of names) {
+    const value = env[name];
+    if (value !== undefined && value !== '') return value;
+  }
+  return fallback;
+};
+
 const serviceNamePattern = /^[a-zA-Z0-9_.@-]+\.service$/;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const baseDir = env.BASE_DIR ?? '/opt/local-ai-voice';
   const portalDistDir = env.PORTAL_DIST_DIR ?? path.resolve(process.cwd(), '../portal/dist');
   const sttService = env.STT_SYSTEMD_SERVICE ?? 'local-ai-voice-stt-worker.service';
-  const ttsService = env.TTS_SYSTEMD_SERVICE ?? 'local-ai-voice-tts-chatterbox.service';
-  const kokoroTtsService = env.KOKORO_TTS_SYSTEMD_SERVICE ?? env.TTS_KOKORO_SYSTEMD_SERVICE ?? 'local-ai-voice-tts-kokoro.service';
+  const ttsService =
+    env.TTS_CHATTERBOX_SYSTEMD_SERVICE ?? env.CHATTERBOX_TTS_SYSTEMD_SERVICE ?? env.TTS_SYSTEMD_SERVICE ?? 'local-ai-voice-tts-chatterbox.service';
+  const kokoroTtsService =
+    env.TTS_KOKORO_SYSTEMD_SERVICE ?? env.KOKORO_TTS_SYSTEMD_SERVICE ?? 'local-ai-voice-tts-kokoro.service';
 
   if (
     !serviceNamePattern.test(sttService) ||
@@ -70,6 +86,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   ) {
     throw new Error('Systemd service names must end in .service and contain only safe characters.');
   }
+
+  const defaultTtsProvider = firstEnv(env, ['TTS_DEFAULT_PROVIDER', 'DEFAULT_TTS_PROVIDER'], 'chatterbox').toLowerCase();
+  const defaultTtsModel = firstEnv(env, ['TTS_CHATTERBOX_DEFAULT_MODEL', 'CHATTERBOX_TTS_MODEL', 'DEFAULT_TTS_MODEL'], 'chatterbox-turbo');
+  const kokoroDefaultTtsModel = firstEnv(
+    env,
+    ['TTS_KOKORO_DEFAULT_MODEL', 'KOKORO_TTS_MODEL', 'KOKORO_DEFAULT_TTS_MODEL'],
+    'kokoro-82m'
+  );
 
   return {
     publicHost: env.PUBLIC_HOST ?? '0.0.0.0',
@@ -81,8 +105,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     portalDistDir,
     apiDocsEnabled: boolFromEnv(env.API_DOCS_ENABLED, true),
     sttWorkerUrl: env.STT_WORKER_URL ?? 'http://127.0.0.1:8002',
-    ttsWorkerUrl: env.TTS_WORKER_URL ?? 'http://127.0.0.1:8001',
-    kokoroTtsWorkerUrl: env.KOKORO_TTS_WORKER_URL ?? env.TTS_KOKORO_WORKER_URL ?? 'http://127.0.0.1:8003',
+    ttsWorkerUrl: firstEnv(env, ['TTS_CHATTERBOX_WORKER_URL', 'CHATTERBOX_TTS_WORKER_URL', 'TTS_WORKER_URL'], 'http://127.0.0.1:8001'),
+    kokoroTtsWorkerUrl: firstEnv(
+      env,
+      ['TTS_KOKORO_WORKER_URL', 'KOKORO_TTS_WORKER_URL'],
+      'http://127.0.0.1:8003'
+    ),
     workerTimeoutMs: numberFromEnv(env.WORKER_TIMEOUT_MS, 120_000),
     allowSystemdRestart: boolFromEnv(env.ALLOW_SYSTEMD_RESTART, false),
     sttSystemdService: sttService,
@@ -96,22 +124,48 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     uploadDir: env.UPLOAD_DIR ?? path.join(baseDir, 'uploads'),
     outputDir: env.OUTPUT_DIR ?? path.join(baseDir, 'output'),
     logDir: env.LOG_DIR ?? path.join(baseDir, 'logs'),
-    gpuOnly: boolFromEnv(env.GPU_ONLY, true),
+    gpuOnly: boolFromEnv(env.TTS_GPU_ONLY ?? env.GPU_ONLY, true),
     defaultSttProvider: env.DEFAULT_STT_PROVIDER ?? 'fast-whisper',
     defaultSttModel: env.DEFAULT_STT_MODEL ?? 'large-v3-turbo',
     defaultSttComputeType: env.DEFAULT_STT_COMPUTE_TYPE ?? 'int8_float16',
     defaultSttDevice: env.DEFAULT_STT_DEVICE ?? 'cuda',
-    defaultTtsProvider: env.DEFAULT_TTS_PROVIDER ?? 'chatterbox',
-    defaultTtsModel: env.DEFAULT_TTS_MODEL ?? 'chatterbox-turbo',
-    defaultTtsLanguage: env.DEFAULT_TTS_LANGUAGE ?? 'en',
-    kokoroDefaultTtsModel: env.KOKORO_TTS_MODEL ?? env.KOKORO_DEFAULT_TTS_MODEL ?? 'kokoro-82m',
-    kokoroDefaultTtsVoice: env.KOKORO_TTS_VOICE ?? env.KOKORO_DEFAULT_TTS_VOICE ?? 'af_heart',
+    defaultTtsProvider,
+    defaultTtsModel,
+    defaultTtsVoice: firstEnv(env, ['TTS_CHATTERBOX_DEFAULT_VOICE', 'CHATTERBOX_TTS_VOICE'], 'reference-upload'),
+    defaultTtsLanguage: firstEnv(env, ['TTS_CHATTERBOX_DEFAULT_LANGUAGE', 'DEFAULT_TTS_LANGUAGE'], 'en'),
+    ttsChatterboxEnabled: boolFromEnv(env.TTS_CHATTERBOX_ENABLED, true),
+    ttsChatterboxAutoload: boolFromEnv(env.TTS_CHATTERBOX_AUTOLOAD ?? env.TTS_PRELOAD_DEFAULT, false),
+    ttsKokoroEnabled: boolFromEnv(env.TTS_KOKORO_ENABLED, true),
+    kokoroDefaultTtsModel,
+    kokoroDefaultTtsVoice: firstEnv(
+      env,
+      ['TTS_KOKORO_DEFAULT_VOICE', 'KOKORO_TTS_VOICE', 'KOKORO_DEFAULT_TTS_VOICE'],
+      'af_heart'
+    ),
+    kokoroDefaultTtsLanguage: firstEnv(
+      env,
+      ['TTS_KOKORO_DEFAULT_LANGUAGE', 'KOKORO_TTS_LANGUAGE', 'KOKORO_DEFAULT_TTS_LANGUAGE'],
+      'a'
+    ),
+    ttsKokoroAutoload: boolFromEnv(env.TTS_KOKORO_AUTOLOAD ?? env.KOKORO_TTS_PRELOAD_DEFAULT, false),
     maxUploadBytes: numberFromEnv(env.MAX_UPLOAD_BYTES, 104_857_600),
     generatedRetentionHours: numberFromEnv(env.GENERATED_RETENTION_HOURS, 24),
     authEnabled: boolFromEnv(env.AUTH_ENABLED, false),
     basicAuthUsername: env.BASIC_AUTH_USERNAME ?? 'admin',
     basicAuthPassword: env.BASIC_AUTH_PASSWORD ?? ''
   };
+}
+
+export function defaultTtsModelForProvider(config: AppConfig, provider: string): string {
+  return provider === 'kokoro' ? config.kokoroDefaultTtsModel : config.defaultTtsModel;
+}
+
+export function defaultTtsVoiceForProvider(config: AppConfig, provider: string): string | undefined {
+  return provider === 'kokoro' ? config.kokoroDefaultTtsVoice : config.defaultTtsVoice;
+}
+
+export function defaultTtsLanguageForProvider(config: AppConfig, provider: string): string {
+  return provider === 'kokoro' ? config.kokoroDefaultTtsLanguage : config.defaultTtsLanguage;
 }
 
 export function toConfigView(config: AppConfig): ConfigView {
@@ -121,7 +175,23 @@ export function toConfigView(config: AppConfig): ConfigView {
       sttProvider: config.defaultSttProvider,
       sttModel: config.defaultSttModel,
       ttsProvider: config.defaultTtsProvider,
-      ttsModel: config.defaultTtsProvider === 'kokoro' ? config.kokoroDefaultTtsModel : config.defaultTtsModel
+      ttsModel: defaultTtsModelForProvider(config, config.defaultTtsProvider)
+    },
+    ttsProviders: {
+      chatterbox: {
+        enabled: config.ttsChatterboxEnabled,
+        workerUrl: config.ttsWorkerUrl,
+        defaultModel: config.defaultTtsModel,
+        defaultVoice: config.defaultTtsVoice,
+        autoLoad: config.ttsChatterboxAutoload
+      },
+      kokoro: {
+        enabled: config.ttsKokoroEnabled,
+        workerUrl: config.kokoroTtsWorkerUrl,
+        defaultModel: config.kokoroDefaultTtsModel,
+        defaultVoice: config.kokoroDefaultTtsVoice,
+        autoLoad: config.ttsKokoroAutoload
+      }
     },
     paths: {
       baseDir: config.baseDir,

@@ -1,21 +1,47 @@
 import type { ModelStatus, VoiceDescriptor, WorkerHealth } from '@local-ai-voice/shared';
 import { builtInVoices, providerSupportsReferenceAudio, ttsCatalog } from './catalog.js';
 import type { AppConfig } from './config.js';
+import { defaultTtsLanguageForProvider, defaultTtsModelForProvider, defaultTtsVoiceForProvider } from './config.js';
 import { WorkerClient } from './worker-client.js';
 
+export interface TtsProviderCapabilities {
+  referenceAudio: boolean;
+  voiceSelection: boolean;
+  languageSelection: boolean;
+  speedControl: boolean;
+  voiceCloning: boolean;
+}
+
 export interface TtsProviderDescriptor {
-  id: string;
+  id: TtsProviderId;
   role: 'tts';
   label: string;
+  name: string;
+  displayName: string;
   workerUrl: string;
+  workerPort?: number;
   systemdService: string;
+  enabled: boolean;
+  active: boolean;
   defaultModel: string;
   defaultVoice?: string;
+  defaultLanguage: string;
+  autoLoad: boolean;
   supportsReferenceAudio: boolean;
   supportsVoiceCloning: boolean;
   supportsLanguageSelection: boolean;
+  capabilities: TtsProviderCapabilities;
   models: string[];
   voices: VoiceDescriptor[];
+}
+
+export interface TtsProviderRuntimeStatus extends TtsProviderDescriptor {
+  reachable: boolean;
+  state: ModelStatus['state'];
+  model?: string | null;
+  voice?: string | null;
+  health: WorkerHealth;
+  status?: ModelStatus;
 }
 
 export class TtsProviderError extends Error {
@@ -44,6 +70,26 @@ export function normalizeTtsProvider(provider: string | undefined, fallback?: st
 
 function labelForProvider(provider: TtsProviderId): string {
   return provider === 'kokoro' ? 'Kokoro TTS' : 'Chatterbox TTS';
+}
+
+function workerPort(workerUrl: string): number | undefined {
+  try {
+    const parsed = new URL(workerUrl);
+    const explicit = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80;
+    return Number.isFinite(explicit) ? explicit : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function failedStatus(provider: TtsProviderId, error: unknown): ModelStatus {
+  return {
+    role: 'tts',
+    provider,
+    state: 'failed',
+    loadedModel: null,
+    error: error instanceof Error ? error.message : String(error)
+  };
 }
 
 export class TtsProviderRegistry {
@@ -77,8 +123,19 @@ export class TtsProviderRegistry {
     return [...ttsProviderIds];
   }
 
+  enabled(provider: string | undefined): boolean {
+    const normalized = normalizeTtsProvider(provider, this.config.defaultTtsProvider);
+    return normalized === 'kokoro' ? this.config.ttsKokoroEnabled : this.config.ttsChatterboxEnabled;
+  }
+
+  ensureEnabled(provider: TtsProviderId): void {
+    if (!this.enabled(provider)) throw new TtsProviderError(400, `TTS provider ${provider} is disabled.`);
+  }
+
   client(provider: string | undefined): WorkerClient {
-    return this.clients[normalizeTtsProvider(provider, this.config.defaultTtsProvider)];
+    const normalized = normalizeTtsProvider(provider, this.config.defaultTtsProvider);
+    this.ensureEnabled(normalized);
+    return this.clients[normalized];
   }
 
   workerUrl(provider: string | undefined): string {
@@ -92,15 +149,15 @@ export class TtsProviderRegistry {
   }
 
   defaultModel(provider: string | undefined): string {
-    const normalized = normalizeTtsProvider(provider, this.config.defaultTtsProvider);
-    if (normalized === 'kokoro') return this.config.kokoroDefaultTtsModel;
-    return this.config.defaultTtsProvider === 'chatterbox' ? this.config.defaultTtsModel : 'chatterbox-turbo';
+    return defaultTtsModelForProvider(this.config, normalizeTtsProvider(provider, this.config.defaultTtsProvider));
   }
 
   defaultVoice(provider: string | undefined): string | undefined {
-    return normalizeTtsProvider(provider, this.config.defaultTtsProvider) === 'kokoro'
-      ? this.config.kokoroDefaultTtsVoice
-      : undefined;
+    return defaultTtsVoiceForProvider(this.config, normalizeTtsProvider(provider, this.config.defaultTtsProvider));
+  }
+
+  defaultLanguage(provider: string | undefined): string {
+    return defaultTtsLanguageForProvider(this.config, normalizeTtsProvider(provider, this.config.defaultTtsProvider));
   }
 
   providerForModel(model: string | undefined): TtsProviderId | undefined {
@@ -118,41 +175,90 @@ export class TtsProviderRegistry {
     const models = ttsCatalog(this.config);
     return this.ids().map((provider) => {
       const providerModels = models.filter((model) => model.provider === provider);
-      return {
+      const supportsReferenceAudio = providerSupportsReferenceAudio(provider);
+      const supportsVoiceCloning = providerModels.some((model) => model.supportsVoiceCloning);
+      const supportsLanguageSelection = providerModels.some((model) => model.supportsLanguageSelection);
+      const descriptor: TtsProviderDescriptor = {
         id: provider,
         role: 'tts',
         label: labelForProvider(provider),
+        name: labelForProvider(provider),
+        displayName: labelForProvider(provider),
         workerUrl: this.workerUrl(provider),
+        workerPort: workerPort(this.workerUrl(provider)),
         systemdService: this.systemdService(provider),
+        enabled: this.enabled(provider),
+        active: this.enabled(provider),
         defaultModel: this.defaultModel(provider),
         defaultVoice: this.defaultVoice(provider),
-        supportsReferenceAudio: providerSupportsReferenceAudio(provider),
-        supportsVoiceCloning: providerModels.some((model) => model.supportsVoiceCloning),
-        supportsLanguageSelection: providerModels.some((model) => model.supportsLanguageSelection),
+        defaultLanguage: this.defaultLanguage(provider),
+        autoLoad: provider === 'kokoro' ? this.config.ttsKokoroAutoload : this.config.ttsChatterboxAutoload,
+        supportsReferenceAudio,
+        supportsVoiceCloning,
+        supportsLanguageSelection,
+        capabilities: {
+          referenceAudio: supportsReferenceAudio,
+          voiceSelection: true,
+          languageSelection: supportsLanguageSelection || provider === 'kokoro',
+          speedControl: true,
+          voiceCloning: supportsVoiceCloning
+        },
         models: providerModels.map((model) => model.id),
         voices: builtInVoices(provider)
       };
+      return descriptor;
     });
   }
 
   async health(provider: string | undefined): Promise<WorkerHealth> {
     const normalized = normalizeTtsProvider(provider, this.config.defaultTtsProvider);
+    if (!this.enabled(normalized)) {
+      return {
+        ok: false,
+        reachable: false,
+        role: 'tts',
+        provider: normalized,
+        state: 'unloaded',
+        loadedModel: null,
+        gpuOnly: this.config.gpuOnly,
+        gpuAvailable: false,
+        error: `TTS provider ${normalized} is disabled.`
+      };
+    }
     const health = await this.clients[normalized].health();
     return { ...health, provider: normalized };
   }
 
   async modelStatus(provider: string | undefined): Promise<ModelStatus> {
     const normalized = normalizeTtsProvider(provider, this.config.defaultTtsProvider);
+    if (!this.enabled(normalized)) {
+      return {
+        role: 'tts',
+        provider: normalized,
+        state: 'unloaded',
+        loadedModel: null,
+        defaultModel: this.defaultModel(normalized),
+        error: `TTS provider ${normalized} is disabled.`
+      };
+    }
     const status = await this.clients[normalized].modelStatus();
     return { ...status, provider: normalized };
   }
 
-  async providerStates(): Promise<Array<TtsProviderDescriptor & { health: WorkerHealth; status?: ModelStatus }>> {
+  async providerStates(): Promise<TtsProviderRuntimeStatus[]> {
     return await Promise.all(
       this.descriptors().map(async (descriptor) => {
         const health = await this.health(descriptor.id);
-        const status = await this.modelStatus(descriptor.id).catch(() => undefined);
-        return { ...descriptor, health, status };
+        const status = await this.modelStatus(descriptor.id).catch((error: unknown) => failedStatus(descriptor.id, error));
+        return {
+          ...descriptor,
+          reachable: Boolean(health.reachable ?? health.ok),
+          state: status.state ?? health.state,
+          model: status.loadedModel ?? health.loadedModel ?? null,
+          voice: descriptor.defaultVoice ?? null,
+          health,
+          status
+        };
       })
     );
   }

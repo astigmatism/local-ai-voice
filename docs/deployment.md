@@ -301,3 +301,33 @@ sudo systemctl start local-ai-voice-stt.service
 ```
 
 If you changed the old STT worker to bind localhost only, restore its previous unit/env from backup before starting it.
+
+## Running both TTS workers under systemd
+
+Production deployment installs separate private systemd services for Chatterbox and Kokoro. They should both be enabled when the appliance has enough VRAM headroom:
+
+```bash
+sudo systemctl enable --now local-ai-voice-tts-chatterbox.service
+sudo systemctl enable --now local-ai-voice-tts-kokoro.service
+sudo systemctl enable --now local-ai-voice-gateway.service
+```
+
+The gateway remains the only public service. Workers bind to localhost:
+
+```text
+0.0.0.0:8000       gateway
+127.0.0.1:8001     Chatterbox worker
+127.0.0.1:8002     STT worker, if installed
+127.0.0.1:8003     Kokoro worker
+```
+
+Use `TTS_CHATTERBOX_ENABLED=true` and `TTS_KOKORO_ENABLED=true` to expose both providers through the gateway. Use `TTS_CHATTERBOX_AUTOLOAD=true` and `TTS_KOKORO_AUTOLOAD=true` when both models should warm during worker startup. `TTS_DEFAULT_PROVIDER=chatterbox` or `kokoro` controls only fallback behavior for providerless requests.
+
+Verify the deployed port map:
+
+```bash
+curl -f http://127.0.0.1:8000/api/services/tts | jq .
+curl -f http://127.0.0.1:8001/health | jq .
+curl -f http://127.0.0.1:8003/health | jq .
+sudo ss -ltnp | grep -E ':8000|:8001|:8002|:8003'
+```

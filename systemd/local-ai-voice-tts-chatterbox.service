@@ -10,6 +10,9 @@ Group=local-ai-voice
 SupplementaryGroups=video render
 WorkingDirectory=/opt/local-ai-voice/app/workers/tts-chatterbox
 EnvironmentFile=/opt/local-ai-voice/config/local-ai-voice.env
+Environment=TTS_PROVIDER=chatterbox
+Environment=TTS_CHATTERBOX_BIND_HOST=127.0.0.1
+Environment=TTS_CHATTERBOX_BIND_PORT=8001
 Environment=TTS_BIND_HOST=127.0.0.1
 Environment=TTS_BIND_PORT=8001
 ExecStart=/opt/local-ai-voice/workers/tts/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --log-level info

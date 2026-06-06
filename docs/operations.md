@@ -148,3 +148,22 @@ sudo systemctl stop local-ai-voice-stt-worker local-ai-voice-tts-chatterbox
 sudo systemctl start local-ai-voice-stt.service
 curl -fsS http://127.0.0.1:8000/health | jq .
 ```
+
+## Operating concurrent Chatterbox and Kokoro
+
+Daily status checks should look at the combined gateway view and the private worker health endpoints:
+
+```bash
+curl -f http://127.0.0.1:8000/api/services/tts | jq .
+curl -f http://127.0.0.1:8001/health | jq .
+curl -f http://127.0.0.1:8003/health | jq .
+```
+
+One TTS provider can be unhealthy while the other continues to serve requests. Restart only the failed worker unless you intentionally want a full TTS restart:
+
+```bash
+sudo systemctl restart local-ai-voice-tts-chatterbox.service
+sudo systemctl restart local-ai-voice-tts-kokoro.service
+```
+
+Changing the default provider through `PATCH /api/config/tts` is safe: it only changes fallback routing for providerless `/api/tts/speak` and `/speak` requests and does not unload any provider.

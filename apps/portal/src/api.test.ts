@@ -69,4 +69,24 @@ describe('portal api helpers', () => {
     expect(result.model).toBe('kokoro-82m');
     expect(result.voice).toBe('af_heart');
   });
+
+  it('posts TTS lifecycle requests with explicit provider selection', async () => {
+    const calls: Array<{ url: string | URL | Request; body: unknown }> = [];
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url, body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.loadTts('kokoro', 'kokoro-82m', 'a');
+    await api.reloadTts('chatterbox', 'chatterbox-turbo', 'en');
+    await api.unloadTts('kokoro', 'soft');
+
+    expect(calls).toEqual([
+      { url: '/api/models/tts/load', body: { provider: 'kokoro', model: 'kokoro-82m', language: 'a' } },
+      { url: '/api/models/tts/reload', body: { provider: 'chatterbox', model: 'chatterbox-turbo', language: 'en' } },
+      { url: '/api/models/tts/unload', body: { provider: 'kokoro', strategy: 'soft', clearCache: true } }
+    ]);
+  });
+
 });

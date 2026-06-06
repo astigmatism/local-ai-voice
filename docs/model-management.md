@@ -240,3 +240,23 @@ Do not change `/api/stt/transcribe` or `/transcribe` unless adding optional fiel
 5. Add catalog entries, provider registry wiring, environment defaults, and systemd units.
 
 Kokoro now provides the first second-provider implementation of this contract.
+
+## Independent TTS model lifecycle
+
+Chatterbox and Kokoro lifecycle operations are provider-scoped. Loading Kokoro does not unload Chatterbox, loading Chatterbox does not unload Kokoro, and changing the default provider does not affect either loaded model.
+
+```bash
+curl -f -X POST http://127.0.0.1:8000/api/models/tts/load \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"chatterbox","model":"chatterbox-turbo","language":"en"}' | jq .
+
+curl -f -X POST http://127.0.0.1:8000/api/models/tts/load \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"kokoro","model":"kokoro-82m","language":"a"}' | jq .
+
+curl -f -X POST http://127.0.0.1:8000/api/models/tts/unload \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"kokoro","strategy":"soft"}' | jq .
+```
+
+When VRAM is insufficient, the selected worker should return a clear load failure. The gateway intentionally does not free VRAM by unloading a different provider unless the caller sends an explicit unload request for that provider.

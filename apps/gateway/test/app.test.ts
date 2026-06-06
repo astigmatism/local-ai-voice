@@ -81,12 +81,18 @@ interface CapturedTranscribe {
   fields: Record<string, string>;
 }
 
+interface CapturedLifecycle {
+  action: 'load' | 'unload' | 'reload';
+  payload: Record<string, unknown>;
+}
+
 function worker(
   role: 'stt' | 'tts',
   speaks: CapturedSpeak[] = [],
   transcribes: CapturedTranscribe[] = [],
   providerOverride?: string,
-  modelOverride?: string
+  modelOverride?: string,
+  lifecycle: CapturedLifecycle[] = []
 ): WorkerClient {
   const provider = providerOverride ?? (role === 'stt' ? 'fast-whisper' : 'chatterbox');
   const model = modelOverride ?? (role === 'stt' ? 'large-v3-turbo' : provider === 'kokoro' ? 'kokoro-82m' : 'chatterbox-turbo');
@@ -108,18 +114,33 @@ function worker(
       defaultModel: model,
       device: 'cuda'
     }),
-    loadModel: async (payload: { model: string; provider?: string }) => ({
-      role,
-      provider: payload.provider ?? provider,
-      state: 'loaded',
-      loadedModel: payload.model
-    }),
-    unloadModel: async (payload: { provider?: string } = {}) => ({
-      role,
-      provider: payload.provider ?? provider,
-      state: 'unloaded',
-      loadedModel: null
-    }),
+    loadModel: async (payload: { model: string; provider?: string }) => {
+      lifecycle.push({ action: 'load', payload: payload as Record<string, unknown> });
+      return {
+        role,
+        provider: payload.provider ?? provider,
+        state: 'loaded',
+        loadedModel: payload.model
+      };
+    },
+    unloadModel: async (payload: { provider?: string } = {}) => {
+      lifecycle.push({ action: 'unload', payload: payload as Record<string, unknown> });
+      return {
+        role,
+        provider: payload.provider ?? provider,
+        state: 'unloaded',
+        loadedModel: null
+      };
+    },
+    reloadModel: async (payload: { model: string; provider?: string }) => {
+      lifecycle.push({ action: 'reload', payload: payload as Record<string, unknown> });
+      return {
+        role,
+        provider: payload.provider ?? provider,
+        state: 'loaded',
+        loadedModel: payload.model
+      };
+    },
     transcribe: async (upload: UploadedAudio, fields: Record<string, string>) => {
       transcribes.push({ upload, fields });
       return {
@@ -586,4 +607,241 @@ describe('gateway routes', () => {
     expect(speaks.at(-1)?.payload.referenceAudioId).toBe(reference.referenceId);
     await app.close();
   });
+
+  it('returns both TTS provider statuses from /api/services/tts', async () => {
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: worker('tts', [], [], 'chatterbox', 'chatterbox-turbo'),
+        kokoro: worker('tts', [], [], 'kokoro', 'kokoro-82m')
+      }
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/services/tts' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ ok: true, defaultProvider: 'chatterbox' });
+    expect(response.json().providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'chatterbox', reachable: true, state: 'loaded', workerPort: 8001 }),
+        expect.objectContaining({ id: 'kokoro', reachable: true, state: 'loaded', workerPort: 8003 })
+      ])
+    );
+    await app.close();
+  });
+
+  it('routes Chatterbox synthesis requests only to the Chatterbox worker', async () => {
+    const chatterboxSpeaks: CapturedSpeak[] = [];
+    const kokoroSpeaks: CapturedSpeak[] = [];
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: worker('tts', chatterboxSpeaks),
+        kokoro: worker('tts', kokoroSpeaks, [], 'kokoro', 'kokoro-82m')
+      }
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/tts/speak',
+      payload: { text: 'Chatterbox should speak this.', provider: 'chatterbox' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(chatterboxSpeaks).toHaveLength(1);
+    expect(kokoroSpeaks).toHaveLength(0);
+    expect(chatterboxSpeaks.at(-1)?.payload).toMatchObject({ provider: 'chatterbox', model: 'chatterbox-turbo' });
+    await app.close();
+  });
+
+  it('lets compatibility POST /speak override the default provider for one Kokoro request', async () => {
+    const chatterboxSpeaks: CapturedSpeak[] = [];
+    const kokoroSpeaks: CapturedSpeak[] = [];
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: worker('tts', chatterboxSpeaks),
+        kokoro: worker('tts', kokoroSpeaks, [], 'kokoro', 'kokoro-82m')
+      }
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/speak',
+      payload: { text: 'Compatibility route using Kokoro.', provider: 'kokoro', voice: 'af_heart' }
+    });
+    const defaults = await app.inject({ method: 'GET', url: '/api/defaults' });
+
+    expect(response.statusCode).toBe(200);
+    expect(chatterboxSpeaks).toHaveLength(0);
+    expect(kokoroSpeaks).toHaveLength(1);
+    expect(defaults.json().tts.provider).toBe('chatterbox');
+    await app.close();
+  });
+
+  it('rejects unknown TTS providers with a clear 400', async () => {
+    const app = await buildApp({ config: tempConfig(), sttClient: worker('stt'), ttsClient: worker('tts') });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/tts/speak',
+      payload: { text: 'bad provider', provider: 'not-a-provider' }
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/Unsupported TTS provider/i);
+    await app.close();
+  });
+
+  it('returns 503 for an unavailable Kokoro worker while Chatterbox remains healthy', async () => {
+    const chatterboxSpeaks: CapturedSpeak[] = [];
+    const unavailableKokoro = {
+      ...worker('tts', [], [], 'kokoro', 'kokoro-82m'),
+      health: async () => ({
+        ok: false,
+        reachable: false,
+        role: 'tts' as const,
+        provider: 'kokoro',
+        state: 'failed' as const,
+        loadedModel: null,
+        gpuOnly: true,
+        gpuAvailable: false,
+        error: 'Kokoro worker unavailable'
+      }),
+      modelStatus: async () => {
+        throw Object.assign(new Error('Kokoro worker unavailable'), { statusCode: 503 });
+      },
+      speak: async () => {
+        throw Object.assign(new Error('Kokoro worker unavailable'), { statusCode: 503 });
+      }
+    } as unknown as WorkerClient;
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: { chatterbox: worker('tts', chatterboxSpeaks), kokoro: unavailableKokoro }
+    });
+
+    const services = await app.inject({ method: 'GET', url: '/api/services/tts' });
+    const kokoro = services.json().providers.find((provider: { id: string }) => provider.id === 'kokoro');
+    const chatterbox = services.json().providers.find((provider: { id: string }) => provider.id === 'chatterbox');
+    const failedSpeak = await app.inject({
+      method: 'POST',
+      url: '/api/tts/speak',
+      payload: { text: 'kokoro unavailable', provider: 'kokoro' }
+    });
+    const workingSpeak = await app.inject({
+      method: 'POST',
+      url: '/api/tts/speak',
+      payload: { text: 'chatterbox still works', provider: 'chatterbox' }
+    });
+
+    expect(kokoro).toMatchObject({ id: 'kokoro', reachable: false, state: 'failed' });
+    expect(chatterbox).toMatchObject({ id: 'chatterbox', reachable: true, state: 'loaded' });
+    expect(failedSpeak.statusCode).toBe(503);
+    expect(workingSpeak.statusCode).toBe(200);
+    expect(chatterboxSpeaks).toHaveLength(1);
+    await app.close();
+  });
+
+  it('returns 503 for an unavailable Chatterbox worker while Kokoro remains healthy', async () => {
+    const kokoroSpeaks: CapturedSpeak[] = [];
+    const unavailableChatterbox = {
+      ...worker('tts'),
+      health: async () => ({
+        ok: false,
+        reachable: false,
+        role: 'tts' as const,
+        provider: 'chatterbox',
+        state: 'failed' as const,
+        loadedModel: null,
+        gpuOnly: true,
+        gpuAvailable: false,
+        error: 'Chatterbox worker unavailable'
+      }),
+      modelStatus: async () => {
+        throw Object.assign(new Error('Chatterbox worker unavailable'), { statusCode: 503 });
+      },
+      speak: async () => {
+        throw Object.assign(new Error('Chatterbox worker unavailable'), { statusCode: 503 });
+      }
+    } as unknown as WorkerClient;
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: { chatterbox: unavailableChatterbox, kokoro: worker('tts', kokoroSpeaks, [], 'kokoro', 'kokoro-82m') }
+    });
+
+    const failedSpeak = await app.inject({
+      method: 'POST',
+      url: '/api/tts/speak',
+      payload: { text: 'chatterbox unavailable', provider: 'chatterbox' }
+    });
+    const workingSpeak = await app.inject({
+      method: 'POST',
+      url: '/api/tts/speak',
+      payload: { text: 'kokoro still works', provider: 'kokoro', voice: 'af_heart' }
+    });
+
+    expect(failedSpeak.statusCode).toBe(503);
+    expect(workingSpeak.statusCode).toBe(200);
+    expect(kokoroSpeaks).toHaveLength(1);
+    await app.close();
+  });
+
+  it('load, unload, and reload TTS routes target only the specified provider', async () => {
+    const chatterboxLifecycle: CapturedLifecycle[] = [];
+    const kokoroLifecycle: CapturedLifecycle[] = [];
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: worker('tts', [], [], 'chatterbox', 'chatterbox-turbo', chatterboxLifecycle),
+        kokoro: worker('tts', [], [], 'kokoro', 'kokoro-82m', kokoroLifecycle)
+      }
+    });
+
+    await app.inject({ method: 'POST', url: '/api/models/tts/load', payload: { provider: 'kokoro', model: 'kokoro-82m' } });
+    await app.inject({ method: 'POST', url: '/api/models/tts/reload', payload: { provider: 'kokoro', model: 'kokoro-82m' } });
+    await app.inject({ method: 'POST', url: '/api/models/tts/unload', payload: { provider: 'kokoro', strategy: 'soft' } });
+
+    expect(kokoroLifecycle.map((entry) => entry.action)).toEqual(['load', 'reload', 'unload']);
+    expect(chatterboxLifecycle).toHaveLength(0);
+    await app.close();
+  });
+
+  it('setting the default TTS provider does not unload or mutate the other provider', async () => {
+    const chatterboxLifecycle: CapturedLifecycle[] = [];
+    const kokoroLifecycle: CapturedLifecycle[] = [];
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: worker('tts', [], [], 'chatterbox', 'chatterbox-turbo', chatterboxLifecycle),
+        kokoro: worker('tts', [], [], 'kokoro', 'kokoro-82m', kokoroLifecycle)
+      }
+    });
+
+    const response = await app.inject({
+      method: 'PATCH',
+      url: '/api/config/tts',
+      payload: { provider: 'kokoro', defaultModel: 'kokoro-82m', language: 'a' }
+    });
+    const services = await app.inject({ method: 'GET', url: '/api/services/tts' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().tts.provider).toBe('kokoro');
+    expect(chatterboxLifecycle).toHaveLength(0);
+    expect(kokoroLifecycle).toHaveLength(0);
+    expect(services.json().providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'chatterbox', state: 'loaded' }),
+        expect.objectContaining({ id: 'kokoro', state: 'loaded' })
+      ])
+    );
+    await app.close();
+  });
+
 });

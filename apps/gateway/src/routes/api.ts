@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import type { LoadModelRequest, ModelStatus, ServiceRole, UnloadModelRequest, VoiceDescriptor } from '@local-ai-voice/shared';
 import { builtInVoices, providerSupportsReferenceAudio, sttCatalog, ttsCatalog } from '../catalog.js';
 import type { AppConfig } from '../config.js';
-import type { ConfigStore } from '../config-store.js';
+import type { ConfigStore, MutableApplianceConfig } from '../config-store.js';
 import { getGpuStatus } from '../gpu.js';
 import { recentLogs } from '../logs.js';
 import { fieldBoolean, saveUpload } from '../storage.js';
@@ -20,7 +20,7 @@ import {
   ReferenceAudioError
 } from '../reference-audio.js';
 import { normalizeTtsProvider } from '../tts-providers.js';
-import type { TtsProviderId, TtsProviderRegistry } from '../tts-providers.js';
+import type { TtsProviderId, TtsProviderRegistry, TtsProviderRuntimeStatus } from '../tts-providers.js';
 import type { WorkerClient } from '../worker-client.js';
 import {
   getFirstFile,
@@ -164,8 +164,47 @@ async function voicesForProvider(
   return [...byId.values()];
 }
 
-function defaultModelForSpeak(ttsProviders: TtsProviderRegistry, provider: TtsProviderId, mutableProvider: string, mutableModel: string): string {
-  return provider === mutableProvider ? mutableModel : ttsProviders.defaultModel(provider);
+function providerConfig(mutable: MutableApplianceConfig, provider: TtsProviderId) {
+  return mutable.tts.providers?.[provider];
+}
+
+function defaultModelForSpeak(ttsProviders: TtsProviderRegistry, provider: TtsProviderId, mutable: MutableApplianceConfig): string {
+  return providerConfig(mutable, provider)?.defaultModel ?? (provider === mutable.tts.provider ? mutable.tts.defaultModel : ttsProviders.defaultModel(provider));
+}
+
+function defaultLanguageForSpeak(ttsProviders: TtsProviderRegistry, provider: TtsProviderId, mutable: MutableApplianceConfig): string {
+  return providerConfig(mutable, provider)?.language ?? (provider === mutable.tts.provider ? mutable.tts.language : ttsProviders.defaultLanguage(provider));
+}
+
+function defaultVoiceForSpeak(ttsProviders: TtsProviderRegistry, provider: TtsProviderId, mutable: MutableApplianceConfig): string | undefined {
+  return providerConfig(mutable, provider)?.defaultVoice ?? ttsProviders.defaultVoice(provider);
+}
+
+function publicProviderState(provider: TtsProviderRuntimeStatus, mutable: MutableApplianceConfig) {
+  const providerDefaults = providerConfig(mutable, provider.id);
+  const activeReferenceAudio = providerSupportsReferenceAudio(provider.id) ? publicActiveReference(mutable, provider.id) : null;
+  return {
+    id: provider.id,
+    name: provider.name,
+    label: provider.label,
+    displayName: provider.displayName,
+    workerUrl: provider.workerUrl,
+    workerPort: provider.workerPort,
+    systemdService: provider.systemdService,
+    enabled: provider.enabled,
+    active: provider.active,
+    reachable: provider.reachable,
+    state: provider.state,
+    model: provider.model ?? providerDefaults?.defaultModel ?? provider.defaultModel,
+    loadedModel: provider.status?.loadedModel ?? provider.health.loadedModel ?? null,
+    defaultModel: providerDefaults?.defaultModel ?? provider.defaultModel,
+    voice: providerDefaults?.defaultVoice ?? provider.voice ?? provider.defaultVoice ?? null,
+    language: providerDefaults?.language ?? provider.defaultLanguage,
+    capabilities: provider.capabilities,
+    health: provider.health,
+    status: provider.status,
+    activeReferenceAudio
+  };
 }
 
 export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDependencies): Promise<void> {
@@ -179,8 +218,8 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
       ok: gpu.available && stt.ok && tts.ok,
       checkedAt: new Date().toISOString(),
       gpu,
-      services: { stt, tts: { ...tts, activeReferenceAudio: publicActiveReference(mutable) } },
-      ttsProviders: providerStates
+      services: { stt, tts: { ...tts, activeReferenceAudio: publicActiveReference(mutable, ttsProvider) } },
+      ttsProviders: providerStates.map((provider) => publicProviderState(provider, mutable))
     };
   });
 
@@ -191,26 +230,34 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
     const [stt, mutable] = await Promise.all([sttClient.health(), configStore.read()]);
     const ttsProvider = ttsProviders.resolveProvider(undefined, mutable.tts.defaultModel, mutable.tts.provider);
     const [tts, providerStates] = await Promise.all([ttsProviders.health(ttsProvider), ttsProviders.providerStates()]);
-    return { stt, tts: { ...tts, activeReferenceAudio: publicActiveReference(mutable) }, ttsProviders: providerStates };
+    return { stt, tts: { ...tts, activeReferenceAudio: publicActiveReference(mutable, ttsProvider) }, ttsProviders: providerStates.map((provider) => publicProviderState(provider, mutable)) };
   });
 
   app.get('/api/services/stt', async () => await sttClient.health());
   app.get('/api/services/tts', async (request) => {
     const mutable = await configStore.read();
-    const provider = ttsProviders.resolveProvider(queryProvider(request.query), undefined, mutable.tts.provider);
-    const [tts, status] = await Promise.all([
-      ttsProviders.health(provider),
-      ttsProviders.modelStatus(provider).catch((error: unknown) => failedModelStatus(provider, error))
-    ]);
+    const selectedProvider = ttsProviders.resolveProvider(queryProvider(request.query), undefined, mutable.tts.provider);
+    const providerStates = await ttsProviders.providerStates();
+    const providers = providerStates.map((provider) => publicProviderState(provider, mutable));
+    const selected = providers.find((provider) => provider.id === selectedProvider) ?? providers[0];
     return {
-      ...tts,
-      status,
-      provider,
-      activeReferenceAudio: provider === mutable.tts.provider ? publicActiveReference(mutable) : null
+      ...(selected?.health ?? {}),
+      ok: providers.some((provider) => provider.enabled && provider.reachable),
+      defaultProvider: mutable.tts.provider,
+      selectedProvider,
+      provider: selectedProvider,
+      providers,
+      statuses: Object.fromEntries(providers.map((provider) => [provider.id, provider.status])),
+      status: selected?.status,
+      activeReferenceAudio: selected?.activeReferenceAudio ?? null
     };
   });
 
-  app.get('/api/tts/providers', async () => ({ providers: await ttsProviders.providerStates() }));
+  app.get('/api/tts/providers', async () => {
+    const mutable = await configStore.read();
+    const providerStates = await ttsProviders.providerStates();
+    return { defaultProvider: mutable.tts.provider, providers: providerStates.map((provider) => publicProviderState(provider, mutable)) };
+  });
 
   app.get('/api/models', async () => ({
     stt: sttCatalog(config),
@@ -256,11 +303,28 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
       const provider = ttsProviders.resolveProvider(body?.provider, body?.model, mutable.tts.provider);
       const payload: LoadModelRequest = {
         provider,
-        model: body?.model ?? defaultModelForSpeak(ttsProviders, provider, mutable.tts.provider, mutable.tts.defaultModel),
-        language: body?.language ?? (provider === mutable.tts.provider ? mutable.tts.language : config.defaultTtsLanguage),
+        model: body?.model ?? defaultModelForSpeak(ttsProviders, provider, mutable),
+        language: body?.language ?? defaultLanguageForSpeak(ttsProviders, provider, mutable),
         options: body?.options
       };
       return await ttsProviders.client(provider).loadModel(payload);
+    } catch (error) {
+      sendError(reply, error);
+    }
+  });
+
+  app.post('/api/models/tts/reload', async (request, reply) => {
+    try {
+      const body = request.body as Partial<LoadModelRequest> | undefined;
+      const mutable = await configStore.read();
+      const provider = ttsProviders.resolveProvider(body?.provider, body?.model, mutable.tts.provider);
+      const payload: LoadModelRequest = {
+        provider,
+        model: body?.model ?? defaultModelForSpeak(ttsProviders, provider, mutable),
+        language: body?.language ?? defaultLanguageForSpeak(ttsProviders, provider, mutable),
+        options: body?.options
+      };
+      return await ttsProviders.client(provider).reloadModel(payload);
     } catch (error) {
       sendError(reply, error);
     }
@@ -333,9 +397,9 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
       speakRequest = {
         ...speakRequest,
         provider,
-        model: speakRequest.model ?? defaultModelForSpeak(ttsProviders, provider, mutable.tts.provider, mutable.tts.defaultModel),
-        language: speakRequest.language ?? (provider === mutable.tts.provider ? mutable.tts.language : config.defaultTtsLanguage),
-        voice: speakRequest.voice ?? ttsProviders.defaultVoice(provider)
+        model: speakRequest.model ?? defaultModelForSpeak(ttsProviders, provider, mutable),
+        language: speakRequest.language ?? defaultLanguageForSpeak(ttsProviders, provider, mutable),
+        voice: speakRequest.voice ?? defaultVoiceForSpeak(ttsProviders, provider, mutable)
       };
       if (!referenceAudio && providerSupportsReferenceAudio(provider)) {
         const resolvedReferenceId = await resolveRequestedOrActiveReferenceId(config, mutable, requestedReferenceId, provider);
@@ -391,9 +455,10 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
       const provider = providerFromDeleteRequest(request.query, request.body, mutable.tts.provider);
       const referenceId = referenceIdFromDeleteRequest(request.params, request.body);
       const deleted = await deleteReferenceAudio(config, provider, referenceId);
-      const activeReferenceCleared = mutable.tts.activeReferenceId === deleted.referenceId;
+      const deletedProvider = normalizeTtsProvider(deleted.provider, mutable.tts.provider);
+      const activeReferenceCleared = providerConfig(mutable, deletedProvider)?.activeReferenceId === deleted.referenceId;
       if (activeReferenceCleared) {
-        await configStore.patchTts({ activeReferenceId: null, activeReference: null });
+        await configStore.patchTts({ provider: deletedProvider, activeReferenceId: null, activeReference: null });
       }
       return {
         ok: true,
@@ -417,9 +482,10 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
       const provider = providerFromDeleteRequest(request.query, request.body, mutable.tts.provider);
       const referenceId = referenceIdFromDeleteRequest(request.params, request.body);
       const deleted = await deleteReferenceAudio(config, provider, referenceId);
-      const activeReferenceCleared = mutable.tts.activeReferenceId === deleted.referenceId;
+      const deletedProvider = normalizeTtsProvider(deleted.provider, mutable.tts.provider);
+      const activeReferenceCleared = providerConfig(mutable, deletedProvider)?.activeReferenceId === deleted.referenceId;
       if (activeReferenceCleared) {
-        await configStore.patchTts({ activeReferenceId: null, activeReference: null });
+        await configStore.patchTts({ provider: deletedProvider, activeReferenceId: null, activeReference: null });
       }
       return {
         ok: true,
@@ -454,31 +520,47 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
 
   app.patch('/api/config/tts', async (request, reply) => {
     try {
-      const body =
-        request.body as
-          | { provider?: string; defaultModel?: string; language?: string; activeReferenceId?: string | null }
-          | undefined;
-      const patch: {
-        provider?: string;
-        defaultModel?: string;
-        language?: string;
-        activeReferenceId?: string | null;
-        activeReference?: null;
-      } = {};
+      const body = request.body as
+        | {
+            provider?: string;
+            defaultProvider?: string;
+            defaultModel?: string;
+            defaultVoice?: string;
+            language?: string;
+            activeReferenceId?: string | null;
+            providers?: Record<string, { defaultModel?: string; defaultVoice?: string; language?: string; enabled?: boolean }>;
+          }
+        | undefined;
       const mutable = await configStore.read();
-      const nextProvider = body?.provider !== undefined
-        ? ttsProviders.resolveProvider(body.provider, body.defaultModel, mutable.tts.provider)
+      const requestedProvider = body?.provider ?? body?.defaultProvider;
+      const nextProvider = requestedProvider !== undefined
+        ? ttsProviders.resolveProvider(requestedProvider, body?.defaultModel, mutable.tts.provider)
         : body?.defaultModel !== undefined
           ? ttsProviders.resolveProvider(undefined, body.defaultModel, mutable.tts.provider)
           : normalizeTtsProvider(mutable.tts.provider, config.defaultTtsProvider);
-      if (body?.provider !== undefined || body?.defaultModel !== undefined) patch.provider = nextProvider;
+      const patch: Parameters<ConfigStore['patchTts']>[0] = { provider: nextProvider };
+
       if (body?.defaultModel !== undefined) patch.defaultModel = body.defaultModel;
-      else if (body?.provider !== undefined) patch.defaultModel = ttsProviders.defaultModel(nextProvider);
-      if (body?.language !== undefined) patch.language = body.language;
-      if (!providerSupportsReferenceAudio(nextProvider)) {
-        patch.activeReferenceId = null;
-        patch.activeReference = null;
+      else if (requestedProvider !== undefined && !providerConfig(mutable, nextProvider)?.defaultModel) {
+        patch.defaultModel = ttsProviders.defaultModel(nextProvider);
       }
+      if (body?.language !== undefined) patch.language = body.language;
+      if (body?.defaultVoice !== undefined) {
+        patch.providers = {
+          ...(patch.providers ?? {}),
+          [nextProvider]: { ...((patch.providers ?? {})[nextProvider] ?? {}), defaultVoice: body.defaultVoice }
+        };
+      }
+      if (body?.providers) {
+        for (const [providerId, providerPatch] of Object.entries(body.providers)) {
+          const normalized = normalizeTtsProvider(providerId, nextProvider);
+          patch.providers = {
+            ...(patch.providers ?? {}),
+            [normalized]: { ...((patch.providers ?? {})[normalized] ?? {}), ...providerPatch }
+          };
+        }
+      }
+
       if (body?.activeReferenceId !== undefined) {
         if (body.activeReferenceId === null) {
           return await configStore.patchTts({ ...patch, activeReferenceId: null, activeReference: null });
@@ -509,7 +591,7 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
   app.get('/api/voices', async (request) => {
     const mutable = await configStore.read();
     const provider = ttsProviders.resolveProvider(queryProvider(request.query), undefined, mutable.tts.provider);
-    const active = provider === mutable.tts.provider ? publicActiveReference(mutable) : null;
+    const active = publicActiveReference(mutable, provider);
     return {
       provider,
       voices: await voicesForProvider(config, ttsProviders, provider, active?.referenceId),
@@ -530,7 +612,7 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
         provider: mutable.tts.provider,
         model: mutable.tts.defaultModel,
         language: mutable.tts.language,
-        defaultVoice: ttsProviders.defaultVoice(mutable.tts.provider)
+        defaultVoice: defaultVoiceForSpeak(ttsProviders, normalizeTtsProvider(mutable.tts.provider, config.defaultTtsProvider), mutable)
       },
       requiredTranscribeFileField: getRequiredField({ file: 'file' }, 'file')
     };

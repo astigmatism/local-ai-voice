@@ -158,8 +158,8 @@ LANGUAGE_LABELS = {
 class Settings(BaseModel):
     role: str = "tts"
     provider: str = os.getenv("TTS_PROVIDER", "kokoro")
-    bind_host: str = os.getenv("KOKORO_TTS_BIND_HOST", os.getenv("TTS_BIND_HOST", "127.0.0.1"))
-    bind_port: int = int(os.getenv("KOKORO_TTS_BIND_PORT", os.getenv("TTS_BIND_PORT", "8003")))
+    bind_host: str = os.getenv("TTS_KOKORO_BIND_HOST", os.getenv("KOKORO_TTS_BIND_HOST", os.getenv("TTS_BIND_HOST", "127.0.0.1")))
+    bind_port: int = int(os.getenv("TTS_KOKORO_BIND_PORT", os.getenv("KOKORO_TTS_BIND_PORT", os.getenv("TTS_BIND_PORT", "8003"))))
     gpu_only: bool = False
     device: str = "cuda"
     default_model: str = "kokoro-82m"
@@ -175,14 +175,14 @@ class Settings(BaseModel):
 
     def __init__(self, **data: Any) -> None:
         super().__init__(**data)
-        self.gpu_only = env_bool("GPU_ONLY", True)
+        self.gpu_only = env_bool("TTS_GPU_ONLY", env_bool("GPU_ONLY", True))
         self.device = first_env(["KOKORO_TTS_DEVICE", "TTS_KOKORO_DEVICE", "TTS_DEVICE"], "cuda")
-        self.default_model = first_env(["KOKORO_TTS_MODEL", "KOKORO_DEFAULT_TTS_MODEL"], "kokoro-82m")
-        self.default_voice = first_env(["KOKORO_TTS_VOICE", "KOKORO_DEFAULT_TTS_VOICE"], "af_heart")
-        self.default_language = first_env(["KOKORO_TTS_LANGUAGE", "KOKORO_DEFAULT_TTS_LANGUAGE"], "a")
+        self.default_model = first_env(["TTS_KOKORO_DEFAULT_MODEL", "KOKORO_TTS_MODEL", "KOKORO_DEFAULT_TTS_MODEL"], "kokoro-82m")
+        self.default_voice = first_env(["TTS_KOKORO_DEFAULT_VOICE", "KOKORO_TTS_VOICE", "KOKORO_DEFAULT_TTS_VOICE"], "af_heart")
+        self.default_language = first_env(["TTS_KOKORO_DEFAULT_LANGUAGE", "KOKORO_TTS_LANGUAGE", "KOKORO_DEFAULT_TTS_LANGUAGE"], "a")
         self.repo_id = first_env(["KOKORO_REPO_ID", "KOKORO_TTS_REPO_ID"], "hexgrad/Kokoro-82M")
         self.auto_load_default = env_bool("KOKORO_TTS_AUTO_LOAD_DEFAULT", env_bool("TTS_AUTO_LOAD_DEFAULT", True))
-        self.preload_default = env_bool("KOKORO_TTS_PRELOAD_DEFAULT", False)
+        self.preload_default = env_bool("TTS_KOKORO_AUTOLOAD", env_bool("KOKORO_TTS_PRELOAD_DEFAULT", False))
         self.default_speed = float(first_env(["KOKORO_TTS_DEFAULT_SPEED"], "1.0"))
         self.chunk_silence_ms = int(first_env(["KOKORO_TTS_CHUNK_SILENCE_MS", "TTS_CHUNK_SILENCE_MS"], "120"))
         self.split_pattern = first_env(["KOKORO_TTS_SPLIT_PATTERN"], r"\n+")
@@ -519,6 +519,30 @@ def gpu() -> dict[str, Any]:
 @app.get("/model/status")
 def model_status() -> dict[str, Any]:
     return state.model_dump()
+
+
+@app.get("/status")
+def status() -> dict[str, Any]:
+    """Compatibility alias for orchestration systems that poll /status."""
+    return model_status()
+
+
+@app.get("/models")
+def models() -> dict[str, Any]:
+    return {
+        "provider": settings.provider,
+        "models": [
+            {
+                "id": "kokoro-82m",
+                "provider": settings.provider,
+                "label": "Kokoro 82M",
+                "languages": list(LANGUAGE_LABELS.values()),
+                "supportsReferenceAudio": False,
+                "supportsVoiceCloning": False,
+                "supportsLanguageSelection": True,
+            }
+        ],
+    }
 
 
 @app.post("/model/load")

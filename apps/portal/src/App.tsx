@@ -7,6 +7,7 @@ import {
   type LogsResponse,
   type ModelsResponse,
   type SpeakResponse,
+  type TtsProviderView,
   type VoicesResponse
 } from './api.js';
 
@@ -104,22 +105,51 @@ function ServiceCard({ title, health }: { title: string; health?: WorkerHealth }
   );
 }
 
-function TtsProviderStatus({ health }: { health?: HealthResponse }) {
+function ProviderCapabilityList({ provider }: { provider: TtsProviderView }) {
+  const capabilities = provider.capabilities ?? { referenceAudio: provider.supportsReferenceAudio };
+  return (
+    <span className="hint">
+      {capabilities.referenceAudio ? 'reference WAV' : 'built-in voices'};
+      {capabilities['languageSelection'] ? ' language selection' : ' fixed language'}; speed control
+    </span>
+  );
+}
+
+export function TtsProviderStatus({ health }: { health?: HealthResponse }) {
   const providers = health?.ttsProviders ?? [];
   return (
-    <section className="card">
-      <h2>TTS providers</h2>
+    <section className="card wide">
+      <h2>Concurrent TTS providers</h2>
       {providers.length === 0 ? (
         <p className="hint">Provider status will appear after the gateway refreshes.</p>
       ) : (
-        <div className="provider-list">
+        <div className="provider-grid">
           {providers.map((provider) => (
-            <div key={provider.id} className="provider-row">
-              <div>
-                <strong>{provider.label}</strong>
-                <span>{provider.id}</span>
+            <div key={provider.id} className="provider-panel">
+              <div className="provider-row">
+                <div>
+                  <strong>{provider.displayName ?? provider.label}</strong>
+                  <span>{provider.workerUrl}</span>
+                </div>
+                <StatusPill
+                  ok={Boolean(provider.reachable ?? provider.health?.reachable ?? provider.health?.ok)}
+                  label={provider.state ?? provider.health?.state ?? 'unknown'}
+                />
               </div>
-              <StatusPill ok={Boolean(provider.health?.ok)} label={provider.health?.state ?? 'unknown'} />
+              <div className="kv compact">
+                <span>Enabled</span>
+                <strong>{String(provider.enabled ?? provider.active ?? true)}</strong>
+                <span>Loaded model</span>
+                <strong>{provider.loadedModel ?? provider.model ?? provider.health?.loadedModel ?? 'none'}</strong>
+                <span>Default model</span>
+                <strong>{provider.defaultModel}</strong>
+                <span>Default voice</span>
+                <strong>{provider.voice ?? provider.defaultVoice ?? 'none'}</strong>
+                <span>Worker port</span>
+                <strong>{provider.workerPort ?? 'unknown'}</strong>
+              </div>
+              <ProviderCapabilityList provider={provider} />
+              {provider.health?.error && <p className="error">{provider.health.error}</p>}
             </div>
           ))}
         </div>
@@ -133,12 +163,14 @@ function ModelPicker({
   models,
   onLoad,
   onUnload,
+  onReload,
   onSetDefault
 }: {
   role: 'STT' | 'TTS';
   models: ModelDescriptor[];
   onLoad: (provider: string, model: string, language: string) => Promise<void>;
   onUnload: (provider: string, strategy: LoadStrategy) => Promise<void>;
+  onReload?: (provider: string, model: string, language: string) => Promise<void>;
   onSetDefault: (provider: string, model: string, language: string) => Promise<void>;
 }) {
   const defaultKey = models[0] ? modelKey(models[0]) : '';
@@ -187,6 +219,11 @@ function ModelPicker({
         <button disabled={busy || !selected} onClick={() => selected && void run(() => onUnload(selected.provider, 'soft'))}>
           Soft unload
         </button>
+        {role === 'TTS' && (
+          <button disabled={busy || !selected || !onReload} onClick={() => selected && onReload && void run(() => onReload(selected.provider, selected.id, language))}>
+            Reload
+          </button>
+        )}
         <button disabled={busy || !selected} onClick={() => selected && void run(() => onUnload(selected.provider, 'hard'))}>
           Hard restart
         </button>
@@ -311,8 +348,10 @@ function preferredVoice(provider: string, voices: VoiceDescriptor[], activeRefer
 
 function TtsSpeakCard({ models, configView }: { models: ModelDescriptor[]; configView?: ConfigResponse }) {
   const configuredProvider = configView?.mutable.tts?.provider ?? 'chatterbox';
-  const configuredModel = configView?.mutable.tts?.defaultModel;
-  const configuredLanguage = configView?.mutable.tts?.language ?? 'en';
+  const providerDefaults: NonNullable<NonNullable<ConfigResponse['mutable']['tts']>['providers']> =
+    configView?.mutable.tts?.providers ?? {};
+  const configuredModel = providerDefaults[configuredProvider]?.defaultModel ?? configView?.mutable.tts?.defaultModel;
+  const configuredLanguage = providerDefaults[configuredProvider]?.language ?? configView?.mutable.tts?.language ?? 'en';
   const providers = useMemo(() => [...new Set(models.map((model) => model.provider))], [models]);
   const [provider, setProvider] = useState(configuredProvider);
   const providerModels = models.filter((model) => model.provider === provider);
@@ -334,14 +373,14 @@ function TtsSpeakCard({ models, configView }: { models: ModelDescriptor[]; confi
   useEffect(() => {
     const modelsForProvider = models.filter((candidate) => candidate.provider === provider);
     if (!modelsForProvider.some((candidate) => candidate.id === model)) {
-      const configured = provider === configuredProvider ? configuredModel : undefined;
+      const configured = providerDefaults[provider]?.defaultModel ?? (provider === configuredProvider ? configuredModel : undefined);
       setModel(configured ?? modelsForProvider[0]?.id ?? '');
     }
-  }, [configuredModel, configuredProvider, model, models, provider]);
+  }, [configuredModel, configuredProvider, model, models, provider, providerDefaults]);
 
   useEffect(() => {
-    setLanguage(provider === configuredProvider ? configuredLanguage : provider === 'kokoro' ? 'a' : 'en');
-  }, [configuredLanguage, configuredProvider, provider]);
+    setLanguage(providerDefaults[provider]?.language ?? (provider === configuredProvider ? configuredLanguage : provider === 'kokoro' ? 'a' : 'en'));
+  }, [configuredLanguage, configuredProvider, provider, providerDefaults]);
 
   useEffect(() => {
     let active = true;
@@ -498,7 +537,12 @@ export function App() {
   }, [refresh]);
 
   const applianceOk = useMemo(() => Boolean(health?.ok), [health]);
-  const activeReference = configView?.mutable.tts?.activeReference ?? health?.services.tts.activeReferenceAudio ?? null;
+  const activeReference =
+    configView?.mutable.tts?.providers?.chatterbox?.activeReference ??
+    configView?.mutable.tts?.activeReference ??
+    health?.ttsProviders?.find((provider) => provider.id === 'chatterbox')?.activeReferenceAudio ??
+    health?.services.tts.activeReferenceAudio ??
+    null;
 
   async function withRefresh(action: Promise<unknown>) {
     await action;
@@ -540,6 +584,7 @@ export function App() {
           models={models.tts}
           onLoad={(provider, model, language) => withRefresh(api.loadTts(provider, model, language))}
           onUnload={(provider, strategy) => withRefresh(api.unloadTts(provider, strategy))}
+          onReload={(provider, model, language) => withRefresh(api.reloadTts(provider, model, language))}
           onSetDefault={(provider, model, language) => withRefresh(api.patchTtsDefault(provider, model, language))}
         />
         <TtsSpeakCard models={models.tts} configView={configView} />

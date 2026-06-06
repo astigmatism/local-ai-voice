@@ -175,3 +175,25 @@ Common failures:
 - `404 Reference audio not found`: the active reference id points to a missing file under `/opt/local-ai-voice/voices/chatterbox`.
 - `403 Reference audio is not readable`: fix ownership/permissions so the TTS worker service user can read the WAV.
 - `501 ... audio_prompt_path`: the installed Chatterbox package/model no longer exposes reference audio through `audio_prompt_path`; pin the known-good `chatterbox-tts` version or update the worker provider adapter.
+
+## Troubleshooting concurrent TTS providers
+
+Check both workers before assuming all TTS is down:
+
+```bash
+curl -f http://127.0.0.1:8000/api/services/tts | jq '.providers[] | {id,reachable,state,loadedModel,error:.health.error}'
+curl -f http://127.0.0.1:8001/health | jq .
+curl -f http://127.0.0.1:8003/health | jq .
+```
+
+If Kokoro is unreachable but Chatterbox is healthy, requests with `provider:"chatterbox"` should still work. If Chatterbox is unreachable but Kokoro is healthy, requests with `provider:"kokoro"` should still work. Unknown provider ids return `400`; unreachable selected workers return `503`; worker-side inference/load failures return provider/gateway errors with the worker response included where safe.
+
+For VRAM pressure, unload only the provider you choose to free:
+
+```bash
+curl -f -X POST http://127.0.0.1:8000/api/models/tts/unload \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"chatterbox","strategy":"soft"}' | jq .
+```
+
+The gateway should not automatically unload the other TTS provider to satisfy a failed load.

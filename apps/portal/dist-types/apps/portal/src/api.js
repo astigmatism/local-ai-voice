@@ -47,6 +47,7 @@ export const api = {
     system: () => getJson('/api/system'),
     models: () => getJson('/api/models'),
     config: () => getJson('/api/config'),
+    ttsServices: () => getJson('/api/services/tts'),
     logs: () => getJson('/api/logs?limit=120'),
     voices: (provider) => getJson(`/api/voices?provider=${encodeURIComponent(provider)}`),
     speak: (payload) => postAudio('/api/tts/speak', payload),
@@ -54,6 +55,7 @@ export const api = {
     unloadStt: (strategy) => postJson('/api/models/stt/unload', { strategy, clearCache: true }),
     loadTts: (provider, model, language) => postJson('/api/models/tts/load', { provider, model, language }),
     unloadTts: (provider, strategy) => postJson('/api/models/tts/unload', { provider, strategy, clearCache: true }),
+    reloadTts: (provider, model, language) => postJson('/api/models/tts/reload', { provider, model, language }),
     patchSttDefault: (defaultModel) => patchJson('/api/config/stt', { defaultModel }),
     patchTtsDefault: (provider, defaultModel, language) => patchJson('/api/config/tts', { provider, defaultModel, language }),
     uploadReference: async (file, setDefault = true, provider = 'chatterbox') => {

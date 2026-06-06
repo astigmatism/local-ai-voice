@@ -124,3 +124,25 @@ The gateway has a guarded hard-restart path. It is disabled by default with `ALL
 ## Compatibility preservation
 
 The legacy baseline documented a public STT/API service on `0.0.0.0:8000`, Chatterbox on `127.0.0.1:8001`, and future STT worker on `127.0.0.1:8002`. This implementation keeps public port `8000`, keeps Chatterbox private on `8001`, places faster-whisper STT on `8002`, adds Kokoro private on `8003`, and maps the existing compatibility routes through the Node gateway.
+
+## Concurrent TTS provider architecture
+
+The TTS layer is a multi-provider registry, not a single global current model. Chatterbox and Kokoro can be running and loaded at the same time:
+
+```text
+0.0.0.0:8000       public Node/Fastify gateway and portal
+127.0.0.1:8001     Chatterbox TTS worker
+127.0.0.1:8002     STT worker, when installed
+127.0.0.1:8003     Kokoro TTS worker
+```
+
+Each TTS provider has its own worker URL, systemd unit, health check, model status, default model, default voice, capabilities, and lifecycle controls. `TTS_DEFAULT_PROVIDER` chooses only the fallback provider for requests that omit `provider`; it does not unload, replace, or disable the other TTS worker.
+
+The gateway routes speech requests by provider id:
+
+```json
+{ "provider": "chatterbox", "text": "Generate this with Chatterbox." }
+{ "provider": "kokoro", "text": "Generate this with Kokoro." }
+```
+
+Provider lifecycle APIs are provider-scoped. `POST /api/models/tts/load`, `POST /api/models/tts/unload`, and `POST /api/models/tts/reload` forward to only the selected worker. If VRAM is insufficient, the selected worker should fail clearly; the gateway does not automatically unload the other provider unless a caller explicitly unloads it.
