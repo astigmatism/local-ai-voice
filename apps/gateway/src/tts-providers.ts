@@ -82,14 +82,46 @@ function workerPort(workerUrl: string): number | undefined {
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function failedStatus(provider: TtsProviderId, error: unknown): ModelStatus {
   return {
     role: 'tts',
     provider,
     state: 'failed',
     loadedModel: null,
-    error: error instanceof Error ? error.message : String(error)
+    error: errorMessage(error)
   };
+}
+
+function failedHealth(provider: TtsProviderId, error: unknown, config: AppConfig): WorkerHealth {
+  return {
+    ok: false,
+    reachable: false,
+    role: 'tts',
+    provider,
+    state: 'failed',
+    loadedModel: null,
+    gpuOnly: config.gpuOnly,
+    gpuAvailable: false,
+    error: errorMessage(error)
+  };
+}
+
+function assertTtsStatusBelongsToProvider(provider: TtsProviderId, status: ModelStatus): ModelStatus {
+  if (status.role !== 'tts') {
+    throw new TtsProviderError(502, `TTS worker ${provider} returned non-TTS status role: ${status.role}.`);
+  }
+  if (status.provider && status.provider !== provider) {
+    throw new TtsProviderError(502, `TTS worker ${provider} returned status for provider ${status.provider}.`);
+  }
+  return { ...status, provider };
+}
+
+function healthBelongsToProvider(provider: TtsProviderId, health: WorkerHealth): boolean {
+  return health.role === 'tts' && (!health.provider || health.provider === provider);
 }
 
 export class TtsProviderRegistry {
@@ -226,6 +258,9 @@ export class TtsProviderRegistry {
       };
     }
     const health = await this.clients[normalized].health();
+    if (!healthBelongsToProvider(normalized, health)) {
+      return failedHealth(normalized, `TTS worker ${normalized} returned health for provider ${health.provider}.`, this.config);
+    }
     return { ...health, provider: normalized };
   }
 
@@ -242,7 +277,7 @@ export class TtsProviderRegistry {
       };
     }
     const status = await this.clients[normalized].modelStatus();
-    return { ...status, provider: normalized };
+    return assertTtsStatusBelongsToProvider(normalized, status);
   }
 
   async providerStates(): Promise<TtsProviderRuntimeStatus[]> {
@@ -256,8 +291,8 @@ export class TtsProviderRegistry {
           state: status.state ?? health.state,
           model: status.loadedModel ?? health.loadedModel ?? null,
           voice: descriptor.defaultVoice ?? null,
-          health,
-          status
+          health: { ...health },
+          status: { ...status }
         };
       })
     );

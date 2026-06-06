@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { SpeakRequest } from '@local-ai-voice/shared';
+import type { ModelStatus, SpeakRequest, WorkerHealth } from '@local-ai-voice/shared';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
@@ -179,6 +179,24 @@ function worker(
   } as unknown as WorkerClient;
 }
 
+function ttsWorkerWithStatus(provider: 'chatterbox' | 'kokoro', status: ModelStatus): WorkerClient {
+  const model = status.loadedModel ?? status.defaultModel ?? (provider === 'kokoro' ? 'kokoro-82m' : 'chatterbox-turbo');
+  return {
+    ...worker('tts', [], [], provider, model),
+    health: async (): Promise<WorkerHealth> => ({
+      ok: status.state !== 'failed',
+      role: 'tts',
+      provider,
+      state: status.state,
+      loadedModel: status.loadedModel ?? null,
+      gpuOnly: true,
+      gpuAvailable: true,
+      error: status.error
+    }),
+    modelStatus: async (): Promise<ModelStatus> => ({ ...status })
+  } as unknown as WorkerClient;
+}
+
 async function uploadReference(app: Awaited<ReturnType<typeof buildApp>>, fields: Record<string, string> = {}) {
   const multipart = multipartPayload({ fields: { provider: 'chatterbox', ...fields } });
   const response = await app.inject({
@@ -200,6 +218,22 @@ describe('gateway routes', () => {
     expect(isAllowedAudioType('audio/webm')).toBe(true);
     expect(isAllowedAudioType('audio/webm;codecs=opus')).toBe(true);
     expect(isAllowedAudioType('video/webm')).toBe(true);
+  });
+
+  it('does not let legacy global Kokoro defaults override Chatterbox provider defaults', () => {
+    const config = loadConfig({
+      DEFAULT_TTS_MODEL: 'kokoro-82m',
+      DEFAULT_TTS_LANGUAGE: 'a',
+      TTS_KOKORO_DEFAULT_MODEL: 'kokoro-82m',
+      TTS_KOKORO_DEFAULT_VOICE: 'af_heart',
+      TTS_KOKORO_DEFAULT_LANGUAGE: 'a'
+    } as NodeJS.ProcessEnv);
+
+    expect(config.defaultTtsModel).toBe('chatterbox-turbo');
+    expect(config.defaultTtsLanguage).toBe('en');
+    expect(config.kokoroDefaultTtsModel).toBe('kokoro-82m');
+    expect(config.kokoroDefaultTtsVoice).toBe('af_heart');
+    expect(config.kokoroDefaultTtsLanguage).toBe('a');
   });
 
   it('exposes health and service state', async () => {
@@ -628,6 +662,148 @@ describe('gateway routes', () => {
         expect.objectContaining({ id: 'kokoro', reachable: true, state: 'loaded', workerPort: 8003 })
       ])
     );
+    await app.close();
+  });
+
+
+  it('keeps provider-scoped TTS statuses isolated in /api/services/tts', async () => {
+    const chatterboxStatus: ModelStatus = {
+      role: 'tts',
+      provider: 'chatterbox',
+      state: 'unloaded',
+      loadedModel: null,
+      defaultModel: 'chatterbox-turbo',
+      language: 'en',
+      device: null
+    };
+    const kokoroStatus: ModelStatus = {
+      role: 'tts',
+      provider: 'kokoro',
+      state: 'loaded',
+      loadedModel: 'kokoro-82m',
+      defaultModel: 'kokoro-82m',
+      language: 'a',
+      voice: 'af_heart',
+      repoId: 'hexgrad/Kokoro-82M',
+      device: 'cuda'
+    };
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: ttsWorkerWithStatus('chatterbox', chatterboxStatus),
+        kokoro: ttsWorkerWithStatus('kokoro', kokoroStatus)
+      }
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/services/tts' });
+    const body = response.json() as {
+      providers: Array<{ id: 'chatterbox' | 'kokoro'; status: ModelStatus }>;
+      statuses: Record<'chatterbox' | 'kokoro', ModelStatus>;
+    };
+    const chatterbox = body.providers.find((provider) => provider.id === 'chatterbox');
+    const kokoro = body.providers.find((provider) => provider.id === 'kokoro');
+
+    expect(response.statusCode).toBe(200);
+    expect(chatterbox?.status.provider).toBe('chatterbox');
+    expect(chatterbox?.status.defaultModel).toBe('chatterbox-turbo');
+    expect(chatterbox?.status.defaultModel).not.toBe('kokoro-82m');
+    expect(chatterbox?.status.repoId).not.toBe('hexgrad/Kokoro-82M');
+    expect(chatterbox?.status.voice).not.toBe('af_heart');
+    expect(chatterbox?.status.language).not.toBe('a');
+    expect(body.statuses.chatterbox.provider).toBe('chatterbox');
+    expect(body.statuses.chatterbox.defaultModel).toBe('chatterbox-turbo');
+    expect(kokoro?.status.provider).toBe('kokoro');
+    expect(kokoro?.status.defaultModel).toBe('kokoro-82m');
+    expect(kokoro?.status.voice).toBe('af_heart');
+    expect(kokoro?.status.repoId).toBe('hexgrad/Kokoro-82M');
+    await app.close();
+  });
+
+  it('does not relabel a worker status returned for the wrong provider', async () => {
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: ttsWorkerWithStatus('chatterbox', {
+          role: 'tts',
+          provider: 'kokoro',
+          state: 'loaded',
+          loadedModel: 'kokoro-82m',
+          defaultModel: 'kokoro-82m',
+          language: 'a',
+          voice: 'af_heart',
+          repoId: 'hexgrad/Kokoro-82M'
+        }),
+        kokoro: ttsWorkerWithStatus('kokoro', {
+          role: 'tts',
+          provider: 'kokoro',
+          state: 'loaded',
+          loadedModel: 'kokoro-82m',
+          defaultModel: 'kokoro-82m'
+        })
+      }
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/services/tts' });
+    const body = response.json() as { providers: Array<{ id: 'chatterbox' | 'kokoro'; status: ModelStatus }> };
+    const chatterbox = body.providers.find((provider) => provider.id === 'chatterbox');
+
+    expect(response.statusCode).toBe(200);
+    expect(chatterbox?.status.provider).toBe('chatterbox');
+    expect(chatterbox?.status.state).toBe('failed');
+    expect(chatterbox?.status.defaultModel).not.toBe('kokoro-82m');
+    expect(chatterbox?.status.repoId).not.toBe('hexgrad/Kokoro-82M');
+    expect(chatterbox?.status.error).toMatch(/returned status for provider kokoro/i);
+    await app.close();
+  });
+
+  it('keeps provider-scoped TTS statuses isolated in health endpoints', async () => {
+    const chatterboxStatus: ModelStatus = {
+      role: 'tts',
+      provider: 'chatterbox',
+      state: 'loaded',
+      loadedModel: 'chatterbox-turbo',
+      defaultModel: 'chatterbox-turbo',
+      language: 'en',
+      device: 'cuda'
+    };
+    const kokoroStatus: ModelStatus = {
+      role: 'tts',
+      provider: 'kokoro',
+      state: 'loaded',
+      loadedModel: 'kokoro-82m',
+      defaultModel: 'kokoro-82m',
+      language: 'a',
+      voice: 'af_heart',
+      repoId: 'hexgrad/Kokoro-82M',
+      device: 'cuda'
+    };
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: ttsWorkerWithStatus('chatterbox', chatterboxStatus),
+        kokoro: ttsWorkerWithStatus('kokoro', kokoroStatus)
+      }
+    });
+
+    for (const url of ['/health', '/api/health']) {
+      const response = await app.inject({ method: 'GET', url });
+      const body = response.json() as { ttsProviders: Array<{ id: 'chatterbox' | 'kokoro'; status: ModelStatus }> };
+      const chatterbox = body.ttsProviders.find((provider) => provider.id === 'chatterbox');
+      const kokoro = body.ttsProviders.find((provider) => provider.id === 'kokoro');
+
+      expect(response.statusCode).toBe(200);
+      expect(chatterbox?.status.provider).toBe('chatterbox');
+      expect(chatterbox?.status.defaultModel).toBe('chatterbox-turbo');
+      expect(chatterbox?.status.defaultModel).not.toBe('kokoro-82m');
+      expect(chatterbox?.status.repoId).not.toBe('hexgrad/Kokoro-82M');
+      expect(chatterbox?.status.voice).not.toBe('af_heart');
+      expect(kokoro?.status.provider).toBe('kokoro');
+      expect(kokoro?.status.defaultModel).toBe('kokoro-82m');
+      expect(kokoro?.status.repoId).toBe('hexgrad/Kokoro-82M');
+    }
     await app.close();
   });
 

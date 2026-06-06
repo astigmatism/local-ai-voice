@@ -88,6 +88,9 @@ export interface ModelStatus {
   loadedModel?: string | null;
   defaultModel?: string;
   computeType?: string | null;
+  language?: string | null;
+  voice?: string | null;
+  repoId?: string | null;
   device?: string | null;
   lastChangedAt?: string;
   error?: string | null;

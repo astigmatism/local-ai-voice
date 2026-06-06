@@ -201,8 +201,8 @@ function publicProviderState(provider: TtsProviderRuntimeStatus, mutable: Mutabl
     voice: providerDefaults?.defaultVoice ?? provider.voice ?? provider.defaultVoice ?? null,
     language: providerDefaults?.language ?? provider.defaultLanguage,
     capabilities: provider.capabilities,
-    health: provider.health,
-    status: provider.status,
+    health: { ...provider.health },
+    status: provider.status ? { ...provider.status } : undefined,
     activeReferenceAudio
   };
 }

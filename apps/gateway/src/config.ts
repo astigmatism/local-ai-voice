@@ -70,6 +70,42 @@ const firstEnv = (env: NodeJS.ProcessEnv, names: string[], fallback: string): st
 
 const serviceNamePattern = /^[a-zA-Z0-9_.@-]+\.service$/;
 
+const chatterboxModelIds = new Set([
+  'chatterbox-turbo',
+  'turbo',
+  'chatterbox',
+  'chatterbox-english',
+  'english',
+  'chatterbox-multilingual',
+  'chatterbox-multilingual-v3',
+  'multilingual'
+]);
+const kokoroLanguageCodes = new Set(['a', 'b', 'e', 'f', 'h', 'i', 'j', 'p', 'z']);
+
+const optionalFirstEnv = (env: NodeJS.ProcessEnv, names: string[]): string | undefined => {
+  for (const name of names) {
+    const value = env[name];
+    if (value !== undefined && value !== '') return value;
+  }
+  return undefined;
+};
+
+const defaultChatterboxModelFromEnv = (env: NodeJS.ProcessEnv): string => {
+  const providerSpecific = optionalFirstEnv(env, ['TTS_CHATTERBOX_DEFAULT_MODEL', 'CHATTERBOX_TTS_MODEL']);
+  if (providerSpecific) return providerSpecific;
+  const legacyGlobal = optionalFirstEnv(env, ['DEFAULT_TTS_MODEL']);
+  if (legacyGlobal && chatterboxModelIds.has(legacyGlobal.trim().toLowerCase())) return legacyGlobal;
+  return 'chatterbox-turbo';
+};
+
+const defaultChatterboxLanguageFromEnv = (env: NodeJS.ProcessEnv): string => {
+  const providerSpecific = optionalFirstEnv(env, ['TTS_CHATTERBOX_DEFAULT_LANGUAGE', 'CHATTERBOX_TTS_LANGUAGE']);
+  if (providerSpecific) return providerSpecific;
+  const legacyGlobal = optionalFirstEnv(env, ['DEFAULT_TTS_LANGUAGE']);
+  if (legacyGlobal && !kokoroLanguageCodes.has(legacyGlobal.trim().toLowerCase())) return legacyGlobal;
+  return 'en';
+};
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const baseDir = env.BASE_DIR ?? '/opt/local-ai-voice';
   const portalDistDir = env.PORTAL_DIST_DIR ?? path.resolve(process.cwd(), '../portal/dist');
@@ -88,7 +124,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
 
   const defaultTtsProvider = firstEnv(env, ['TTS_DEFAULT_PROVIDER', 'DEFAULT_TTS_PROVIDER'], 'chatterbox').toLowerCase();
-  const defaultTtsModel = firstEnv(env, ['TTS_CHATTERBOX_DEFAULT_MODEL', 'CHATTERBOX_TTS_MODEL', 'DEFAULT_TTS_MODEL'], 'chatterbox-turbo');
+  const defaultTtsModel = defaultChatterboxModelFromEnv(env);
   const kokoroDefaultTtsModel = firstEnv(
     env,
     ['TTS_KOKORO_DEFAULT_MODEL', 'KOKORO_TTS_MODEL', 'KOKORO_DEFAULT_TTS_MODEL'],
@@ -132,7 +168,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     defaultTtsProvider,
     defaultTtsModel,
     defaultTtsVoice: firstEnv(env, ['TTS_CHATTERBOX_DEFAULT_VOICE', 'CHATTERBOX_TTS_VOICE'], 'reference-upload'),
-    defaultTtsLanguage: firstEnv(env, ['TTS_CHATTERBOX_DEFAULT_LANGUAGE', 'DEFAULT_TTS_LANGUAGE'], 'en'),
+    defaultTtsLanguage: defaultChatterboxLanguageFromEnv(env),
     ttsChatterboxEnabled: boolFromEnv(env.TTS_CHATTERBOX_ENABLED, true),
     ttsChatterboxAutoload: boolFromEnv(env.TTS_CHATTERBOX_AUTOLOAD ?? env.TTS_PRELOAD_DEFAULT, false),
     ttsKokoroEnabled: boolFromEnv(env.TTS_KOKORO_ENABLED, true),
