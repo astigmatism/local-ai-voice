@@ -74,6 +74,7 @@ export interface LoadModelRequest {
 }
 
 export interface UnloadModelRequest {
+  provider?: string;
   strategy?: UnloadStrategy;
   clearCache?: boolean;
 }
@@ -123,6 +124,7 @@ export interface TranscriptResponse {
 
 export interface SpeakRequest {
   text: string;
+  provider?: string;
   voice?: string;
   /** Preferred stable reference WAV identifier returned by /api/tts/reference-audio. */
   referenceId?: string;

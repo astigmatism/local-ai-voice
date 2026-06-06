@@ -214,3 +214,58 @@ td {
   margin: 12px 0;
   grid-template-columns: 1fr;
 }
+
+textarea {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e5e7eb;
+  padding: 12px;
+  font: inherit;
+  resize: vertical;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.provider-list {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #24304d;
+}
+
+.provider-row span {
+  display: block;
+  color: #93a4bc;
+  font-size: 0.85rem;
+}
+
+.audio-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 14px;
+}
+
+.audio-result audio {
+  min-width: 280px;
+}
+
+@media (max-width: 1000px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}

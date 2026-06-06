@@ -8,6 +8,7 @@ The gateway owns the public API on port `8000`, serves the React management port
 0.0.0.0:8000  Node/Fastify gateway + portal + compatibility API
 127.0.0.1:8001 Chatterbox TTS worker
 127.0.0.1:8002 faster-whisper STT worker
+127.0.0.1:8003 Kokoro TTS worker
 ```
 
 The default design is GPU-first. `GPU_ONLY=true` is the default, workers use CUDA by default, and selected models should fail clearly when CUDA is unavailable rather than silently falling back to CPU/system RAM.
@@ -24,6 +25,7 @@ apps/portal/                  React/Vite management portal
 packages/shared/              Shared TypeScript API/domain types
 workers/stt-fast-whisper/     Private FastAPI STT worker using faster-whisper
 workers/tts-chatterbox/       Private FastAPI TTS worker using Chatterbox
+workers/tts-kokoro/           Private FastAPI TTS worker using Kokoro
 stt/                          STT provider/model/runtime metadata scaffolding
 tts/                          TTS provider/model/voice/runtime metadata scaffolding
 systemd/                      Production service units and env template
@@ -37,9 +39,9 @@ docs/                         Architecture, API, VM, GPU, security, and operatio
 | --- | --- |
 | Public gateway | `0.0.0.0:8000` |
 | STT worker | `127.0.0.1:8002` |
-| TTS worker | `127.0.0.1:8001` |
+| TTS workers | Chatterbox `127.0.0.1:8001`; Kokoro `127.0.0.1:8003` |
 | STT provider/model | `fast-whisper` / `large-v3-turbo` |
-| TTS provider/model | `chatterbox` / `chatterbox-turbo` |
+| Default TTS provider/model | `chatterbox` / `chatterbox-turbo`; optional `kokoro` / `kokoro-82m` |
 | Inference mode | GPU-only CUDA by default |
 | Production root | `/opt/local-ai-voice` |
 
@@ -91,14 +93,14 @@ Typical production flow after Ubuntu and NVIDIA driver verification:
 ```bash
 sudo adduser --system --group --home /opt/local-ai-voice --shell /usr/sbin/nologin local-ai-voice
 sudo usermod -aG video,render local-ai-voice
-sudo apt-get update && sudo apt-get install -y git rsync curl jq build-essential python3.12-venv python3-pip ffmpeg
+sudo apt-get update && sudo apt-get install -y git rsync curl jq build-essential python3.12-venv python3-pip ffmpeg espeak-ng libsndfile1
 sudo mkdir -p /opt/local-ai-voice/app && sudo chown -R local-ai-voice:local-ai-voice /opt/local-ai-voice
 sudo -u local-ai-voice git clone <your-repo-url> /opt/local-ai-voice/app
 cd /opt/local-ai-voice/app
 bash scripts/deploy-local.sh
 bash scripts/setup-workers.sh
 bash scripts/install-systemd.sh
-sudo systemctl start local-ai-voice-stt-worker local-ai-voice-tts-chatterbox local-ai-voice-gateway
+sudo systemctl start local-ai-voice-stt-worker local-ai-voice-tts-chatterbox local-ai-voice-tts-kokoro local-ai-voice-gateway
 ```
 
 Then verify:
@@ -120,10 +122,29 @@ curl -fsS -X POST http://127.0.0.1:8000/api/models/stt/load \
 
 curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/load \
   -H 'content-type: application/json' \
-  -d '{"model":"chatterbox-turbo","language":"en"}' | jq .
+  -d '{"provider":"chatterbox","model":"chatterbox-turbo","language":"en"}' | jq .
+
+curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/load \
+  -H 'content-type: application/json' \
+  -d '{"provider":"kokoro","model":"kokoro-82m","language":"a"}' | jq .
 ```
 
 Soft unload asks the worker to delete model references and clear CUDA caches where possible. Hard unload restarts the worker process through systemd when `ALLOW_SYSTEMD_RESTART=true` and privileges are configured.
+
+## Kokoro quick check
+
+Kokoro is available as a second TTS provider. It uses built-in voice IDs instead of uploaded reference WAVs. List voices and synthesize with:
+
+```bash
+curl -fsS http://127.0.0.1:8000/api/voices?provider=kokoro | jq '.voices[0:5]'
+
+curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello from Kokoro.","provider":"kokoro","model":"kokoro-82m","voice":"af_heart","language":"a"}' \
+  --output kokoro.wav
+```
+
+Japanese and Mandarin voices require the Kokoro worker dependencies installed with `misaki[ja,zh]`; `espeak-ng` is required by Kokoro text normalization/phonemization.
 
 ## Chatterbox reference WAV quick check
 
@@ -149,7 +170,7 @@ curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
 curl -f -X DELETE http://127.0.0.1:8000/api/tts/reference-audio/<reference-id>.wav | jq .
 ```
 
-For logs, check `journalctl -u local-ai-voice-gateway` and `journalctl -u local-ai-voice-tts-chatterbox`; the TTS worker logs a sanitized reference id when it applies reference audio.
+For logs, check `journalctl -u local-ai-voice-gateway`, `journalctl -u local-ai-voice-tts-chatterbox`, and `journalctl -u local-ai-voice-tts-kokoro`; the TTS worker logs a sanitized reference id when it applies reference audio.
 
 ## Compatibility API
 
@@ -180,7 +201,7 @@ If you have already moved the STT worker to localhost-only, restore the previous
 
 ## Important risks
 
-- Exact Chatterbox package APIs/checkpoints are version-sensitive. The worker is scaffolded against `chatterbox-tts==0.1.7` and the upstream examples current during this build.
+- Exact Chatterbox and Kokoro package APIs/checkpoints are version-sensitive. Workers pin `chatterbox-tts==0.1.7` and `kokoro==0.9.4` and do not include downloaded model/voice weights.
 - A 10 GB VRAM GPU is useful but not unlimited. Do not expect STT large models and TTS models to remain resident together in all precision/settings combinations.
 - ESXi direct passthrough behavior varies by GPU. Some consumer GPUs reset poorly after VM reboot and may require host reboot.
 - This package does not include model weights, virtualenvs, `node_modules`, caches, generated audio, or secrets.

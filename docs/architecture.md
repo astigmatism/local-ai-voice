@@ -25,6 +25,8 @@ Node Fastify gateway
         +--> 127.0.0.1:8002 STT worker: FastAPI + faster-whisper/CTranslate2
         |
         +--> 127.0.0.1:8001 TTS worker: FastAPI + Chatterbox
+        |
+        +--> 127.0.0.1:8003 TTS worker: FastAPI + Kokoro
 ```
 
 Only the Node gateway should bind publicly. Workers should never be opened directly to the LAN unless you intentionally add an internal service mesh or reverse proxy rule.
@@ -47,7 +49,7 @@ Source-controlled provider metadata is located under:
 ```text
 stt/providers/fast-whisper
 tts/providers/chatterbox
-tts/providers/kokoro-placeholder
+tts/providers/kokoro
 ```
 
 Production data layout is:
@@ -64,6 +66,12 @@ Production data layout is:
 /opt/local-ai-voice/workers   Python virtualenvs
 ```
 
+## TTS provider routing
+
+The gateway exposes Chatterbox and Kokoro as first-class TTS providers. Requests may set `provider` explicitly, or the gateway can infer the provider from the requested TTS model. Chatterbox keeps reference WAV support under `/opt/local-ai-voice/voices/chatterbox`; Kokoro rejects reference audio and uses built-in voice IDs such as `af_heart`, `bf_emma`, `ff_siwis`, `jf_alpha`, and `zf_xiaoxiao`.
+
+Hard unload/restart is provider-specific: `chatterbox` restarts `local-ai-voice-tts-chatterbox.service`, while `kokoro` restarts `local-ai-voice-tts-kokoro.service`.
+
 ## Worker contract
 
 Every worker should implement this private HTTP contract:
@@ -77,6 +85,7 @@ Every worker should implement this private HTTP contract:
 | `POST /model/unload` | Soft unload; hard unload note |
 | `POST /model/reload` | Unload then load |
 | `GET /config` | Runtime config snapshot |
+| `GET /voices` | TTS voice/reference descriptors, TTS workers only |
 | `POST /transcribe` | STT inference, STT workers only |
 | `POST /speak` | TTS inference, TTS workers only |
 
@@ -114,4 +123,4 @@ The gateway has a guarded hard-restart path. It is disabled by default with `ALL
 
 ## Compatibility preservation
 
-The legacy baseline documented a public STT/API service on `0.0.0.0:8000`, Chatterbox on `127.0.0.1:8001`, and future STT worker on `127.0.0.1:8002`. This implementation keeps public port `8000`, keeps Chatterbox private on `8001`, places faster-whisper STT on `8002`, and maps the existing compatibility routes through the Node gateway.
+The legacy baseline documented a public STT/API service on `0.0.0.0:8000`, Chatterbox on `127.0.0.1:8001`, and future STT worker on `127.0.0.1:8002`. This implementation keeps public port `8000`, keeps Chatterbox private on `8001`, places faster-whisper STT on `8002`, adds Kokoro private on `8003`, and maps the existing compatibility routes through the Node gateway.

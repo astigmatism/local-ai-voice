@@ -98,11 +98,7 @@ export function normalizeTranscribeFields(
 ): Record<string, string> {
   const normalized = { ...fields };
 
-  const openAiSttModelAliases = new Set([
-    'whisper-1',
-    'gpt-4o-transcribe',
-    'gpt-4o-mini-transcribe'
-  ]);
+  const openAiSttModelAliases = new Set(['whisper-1', 'gpt-4o-transcribe', 'gpt-4o-mini-transcribe']);
   const requestedModel = firstNonEmptyField(fields, ['model']);
   if (requestedModel !== undefined) {
     const isOpenAiModelAlias = openAiSttModelAliases.has(requestedModel.toLowerCase());
@@ -127,10 +123,22 @@ export function normalizeTranscribeFields(
   return normalized;
 }
 
-export function normalizeSpeakRequest(
-  body: unknown,
-  fields: Record<string, string> = {}
-): SpeakRequest {
+function parseOptions(value: unknown, source: string): Record<string, unknown> | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string') throw new HttpError(400, `${source} must be a JSON object.`);
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('not an object');
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new HttpError(400, `${source} must be a JSON object.`);
+  }
+}
+
+export function normalizeSpeakRequest(body: unknown, fields: Record<string, string> = {}): SpeakRequest {
   const objectBody = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
   const settings =
     objectBody.settings && typeof objectBody.settings === 'object' && !Array.isArray(objectBody.settings)
@@ -162,9 +170,14 @@ export function normalizeSpeakRequest(
     bodyString('reference_id') ??
     bodyString('referenceAudioId') ??
     bodyString('reference_audio_id');
+  const options =
+    parseOptions(fields.options, 'options') ??
+    parseOptions(objectBody.options, 'options') ??
+    parseOptions(settings.options, 'settings.options');
 
   return {
     text,
+    provider: fields.provider ?? bodyString('provider'),
     voice: fields.voice ?? bodyString('voice'),
     referenceId,
     referenceAudioId: referenceId,
@@ -172,8 +185,13 @@ export function normalizeSpeakRequest(
     model: fields.model ?? bodyString('model'),
     speed: fieldNumber(fields, 'speed') ?? bodyNumber('speed'),
     exaggeration: fieldNumber(fields, 'exaggeration') ?? bodyNumber('exaggeration'),
-    cfgWeight: fieldNumber(fields, 'cfg_weight') ?? fieldNumber(fields, 'cfgWeight') ?? bodyNumber('cfgWeight') ?? bodyNumber('cfg_weight'),
-    temperature: fieldNumber(fields, 'temperature') ?? bodyNumber('temperature')
+    cfgWeight:
+      fieldNumber(fields, 'cfg_weight') ??
+      fieldNumber(fields, 'cfgWeight') ??
+      bodyNumber('cfgWeight') ??
+      bodyNumber('cfg_weight'),
+    temperature: fieldNumber(fields, 'temperature') ?? bodyNumber('temperature'),
+    options
   };
 }
 

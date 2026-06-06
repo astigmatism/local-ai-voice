@@ -12,10 +12,12 @@ export interface AppConfig {
   apiDocsEnabled: boolean;
   sttWorkerUrl: string;
   ttsWorkerUrl: string;
+  kokoroTtsWorkerUrl: string;
   workerTimeoutMs: number;
   allowSystemdRestart: boolean;
   sttSystemdService: string;
   ttsSystemdService: string;
+  kokoroTtsSystemdService: string;
   baseDir: string;
   configDir: string;
   modelDir: string;
@@ -32,6 +34,8 @@ export interface AppConfig {
   defaultTtsProvider: string;
   defaultTtsModel: string;
   defaultTtsLanguage: string;
+  kokoroDefaultTtsModel: string;
+  kokoroDefaultTtsVoice: string;
   maxUploadBytes: number;
   generatedRetentionHours: number;
   authEnabled: boolean;
@@ -57,8 +61,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const portalDistDir = env.PORTAL_DIST_DIR ?? path.resolve(process.cwd(), '../portal/dist');
   const sttService = env.STT_SYSTEMD_SERVICE ?? 'local-ai-voice-stt-worker.service';
   const ttsService = env.TTS_SYSTEMD_SERVICE ?? 'local-ai-voice-tts-chatterbox.service';
+  const kokoroTtsService = env.KOKORO_TTS_SYSTEMD_SERVICE ?? env.TTS_KOKORO_SYSTEMD_SERVICE ?? 'local-ai-voice-tts-kokoro.service';
 
-  if (!serviceNamePattern.test(sttService) || !serviceNamePattern.test(ttsService)) {
+  if (
+    !serviceNamePattern.test(sttService) ||
+    !serviceNamePattern.test(ttsService) ||
+    !serviceNamePattern.test(kokoroTtsService)
+  ) {
     throw new Error('Systemd service names must end in .service and contain only safe characters.');
   }
 
@@ -73,10 +82,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     apiDocsEnabled: boolFromEnv(env.API_DOCS_ENABLED, true),
     sttWorkerUrl: env.STT_WORKER_URL ?? 'http://127.0.0.1:8002',
     ttsWorkerUrl: env.TTS_WORKER_URL ?? 'http://127.0.0.1:8001',
+    kokoroTtsWorkerUrl: env.KOKORO_TTS_WORKER_URL ?? env.TTS_KOKORO_WORKER_URL ?? 'http://127.0.0.1:8003',
     workerTimeoutMs: numberFromEnv(env.WORKER_TIMEOUT_MS, 120_000),
     allowSystemdRestart: boolFromEnv(env.ALLOW_SYSTEMD_RESTART, false),
     sttSystemdService: sttService,
     ttsSystemdService: ttsService,
+    kokoroTtsSystemdService: kokoroTtsService,
     baseDir,
     configDir: env.CONFIG_DIR ?? path.join(baseDir, 'config'),
     modelDir: env.MODEL_DIR ?? path.join(baseDir, 'models'),
@@ -93,6 +104,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     defaultTtsProvider: env.DEFAULT_TTS_PROVIDER ?? 'chatterbox',
     defaultTtsModel: env.DEFAULT_TTS_MODEL ?? 'chatterbox-turbo',
     defaultTtsLanguage: env.DEFAULT_TTS_LANGUAGE ?? 'en',
+    kokoroDefaultTtsModel: env.KOKORO_TTS_MODEL ?? env.KOKORO_DEFAULT_TTS_MODEL ?? 'kokoro-82m',
+    kokoroDefaultTtsVoice: env.KOKORO_TTS_VOICE ?? env.KOKORO_DEFAULT_TTS_VOICE ?? 'af_heart',
     maxUploadBytes: numberFromEnv(env.MAX_UPLOAD_BYTES, 104_857_600),
     generatedRetentionHours: numberFromEnv(env.GENERATED_RETENTION_HOURS, 24),
     authEnabled: boolFromEnv(env.AUTH_ENABLED, false),
@@ -108,7 +121,7 @@ export function toConfigView(config: AppConfig): ConfigView {
       sttProvider: config.defaultSttProvider,
       sttModel: config.defaultSttModel,
       ttsProvider: config.defaultTtsProvider,
-      ttsModel: config.defaultTtsModel
+      ttsModel: config.defaultTtsProvider === 'kokoro' ? config.kokoroDefaultTtsModel : config.defaultTtsModel
     },
     paths: {
       baseDir: config.baseDir,

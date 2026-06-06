@@ -7,6 +7,7 @@ APP_DIR="${APP_DIR:-$BASE_DIR/app}"
 sudo install -m 0644 "$APP_DIR/systemd/local-ai-voice-gateway.service" /etc/systemd/system/local-ai-voice-gateway.service
 sudo install -m 0644 "$APP_DIR/systemd/local-ai-voice-stt-worker.service" /etc/systemd/system/local-ai-voice-stt-worker.service
 sudo install -m 0644 "$APP_DIR/systemd/local-ai-voice-tts-chatterbox.service" /etc/systemd/system/local-ai-voice-tts-chatterbox.service
+sudo install -m 0644 "$APP_DIR/systemd/local-ai-voice-tts-kokoro.service" /etc/systemd/system/local-ai-voice-tts-kokoro.service
 sudo install -m 0644 "$APP_DIR/systemd/local-ai-voice-logrotate" /etc/logrotate.d/local-ai-voice
 
 if [ ! -f "$BASE_DIR/config/local-ai-voice.env" ]; then
@@ -14,7 +15,7 @@ if [ ! -f "$BASE_DIR/config/local-ai-voice.env" ]; then
 fi
 
 if [ ! -f "$BASE_DIR/config/worker-libs.env" ]; then
-  cat >&2 <<EOF
+  cat >&2 <<WARN_EOF
 WARNING: $BASE_DIR/config/worker-libs.env does not exist.
 
 The STT systemd unit loads this optional file to expose Python venv NVIDIA
@@ -28,10 +29,14 @@ the services, for example:
 
   BASE_DIR="$BASE_DIR" APP_DIR="$APP_DIR" bash "$APP_DIR/scripts/setup-workers.sh"
 
-EOF
+WARN_EOF
 fi
 
 sudo systemctl daemon-reload
-sudo systemctl enable local-ai-voice-stt-worker.service local-ai-voice-tts-chatterbox.service local-ai-voice-gateway.service
+sudo systemctl enable \
+  local-ai-voice-stt-worker.service \
+  local-ai-voice-tts-chatterbox.service \
+  local-ai-voice-tts-kokoro.service \
+  local-ai-voice-gateway.service
 
 echo "Installed systemd units. Edit $BASE_DIR/config/local-ai-voice.env before starting services."

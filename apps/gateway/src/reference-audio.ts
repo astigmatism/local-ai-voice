@@ -157,6 +157,7 @@ export function publicActiveReference(
 ): TtsReferenceAudio | null {
   const active = mutable.tts.activeReference;
   if (!active || active.referenceId !== mutable.tts.activeReferenceId) return null;
+  if (active.provider !== mutable.tts.provider) return null;
   return { ...active, active: true };
 }
 
@@ -200,9 +201,11 @@ export async function resolveReferenceAudioId(
 export async function resolveRequestedOrActiveReferenceId(
   config: AppConfig,
   mutable: MutableApplianceConfig,
-  requestedReferenceId?: string
+  requestedReferenceId?: string,
+  providerOverride?: string
 ): Promise<string | undefined> {
-  const provider = mutable.tts.provider || config.defaultTtsProvider;
-  const selected = requestedReferenceId || mutable.tts.activeReferenceId || undefined;
+  const provider = providerOverride || mutable.tts.provider || config.defaultTtsProvider;
+  const activeReferenceId = mutable.tts.activeReference?.provider === provider ? mutable.tts.activeReferenceId : undefined;
+  const selected = requestedReferenceId || activeReferenceId || undefined;
   return await resolveReferenceAudioId(config, provider, selected);
 }

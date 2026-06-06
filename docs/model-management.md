@@ -6,8 +6,9 @@
 | --- | --- | --- | --- |
 | STT | `fast-whisper` | `large-v3-turbo` | `workers/stt-fast-whisper` |
 | TTS | `chatterbox` | `chatterbox-turbo` | `workers/tts-chatterbox` |
+| TTS | `kokoro` | `kokoro-82m` | `workers/tts-kokoro` |
 
-The default STT implementation is faster-whisper because it runs Whisper through CTranslate2, supports CUDA, offers lower memory use than the original OpenAI Whisper implementation, and supports GPU quantization options such as `int8_float16`. The default TTS implementation is Chatterbox because you requested it and the upstream package exposes Turbo, English, and multilingual variants.
+The default STT implementation is faster-whisper because it runs Whisper through CTranslate2, supports CUDA, offers lower memory use than the original OpenAI Whisper implementation, and supports GPU quantization options such as `int8_float16`. The default TTS implementation remains Chatterbox, and Kokoro is available as an additional provider for fast built-in multilingual voices.
 
 ## Production directories
 
@@ -52,6 +53,8 @@ curl -fsS -X POST http://127.0.0.1:8000/api/models/stt/unload \
 
 ## TTS model choices
 
+Chatterbox remains the default provider and supports uploaded reference WAV conditioning. Kokoro is an additional provider with built-in voice packs and no reference audio upload support.
+
 Represented Chatterbox model IDs:
 
 | Model ID | Purpose | Notes |
@@ -60,12 +63,28 @@ Represented Chatterbox model IDs:
 | `chatterbox` | Original English model | Exposes CFG/exaggeration-style controls where supported by installed package. |
 | `chatterbox-multilingual` | 23+ language model | Worker supports `language` and optional `options.t3_model=v3` if installed package exposes it. |
 
-Load TTS:
+Represented Kokoro model IDs:
+
+| Model ID | Purpose | Notes |
+| --- | --- | --- |
+| `kokoro-82m` | Fast multilingual built-in voices | Uses Kokoro `KPipeline`, 24 kHz WAV output, and voice IDs such as `af_heart`, `bf_emma`, `ff_siwis`, `jf_alpha`, and `zf_xiaoxiao`. Requires `espeak-ng`; Japanese/Mandarin voices require `misaki[ja,zh]`. |
+
+Load Chatterbox TTS:
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/load \
   -H 'content-type: application/json' \
   -d '{"provider":"chatterbox","model":"chatterbox-turbo","language":"en"}' | jq .
+```
+
+Load Kokoro TTS:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/load \
+  -H 'content-type: application/json' \
+  -d '{"provider":"kokoro","model":"kokoro-82m","language":"a"}' | jq .
+
+curl -fsS http://127.0.0.1:8000/api/voices?provider=kokoro | jq '.voices[0:10]'
 ```
 
 Load multilingual v3 if the installed Chatterbox package supports it:
@@ -81,9 +100,25 @@ Unload TTS:
 ```bash
 curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/unload \
   -H 'content-type: application/json' \
-  -d '{"strategy":"soft","clearCache":true}' | jq .
+  -d '{"provider":"chatterbox","strategy":"soft","clearCache":true}' | jq .
+
+curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/unload \
+  -H 'content-type: application/json' \
+  -d '{"provider":"kokoro","strategy":"soft","clearCache":true}' | jq .
 ```
 
+## Kokoro speech generation
+
+Kokoro requests must use `provider: "kokoro"` or `model: "kokoro-82m"`. Reference audio fields are rejected because Kokoro uses packaged voice IDs.
+
+```bash
+curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hello from Kokoro.","provider":"kokoro","model":"kokoro-82m","voice":"af_heart","language":"a","speed":1.0}' \
+  --output kokoro.wav
+```
+
+Language aliases are normalized by the worker: `a`/`en-us`, `b`/`en-gb`, `e`/`es`, `f`/`fr`, `h`/`hi`, `i`/`it`, `j`/`ja`, `p`/`pt-br`, and `z`/`zh`.
 
 ## Chatterbox reference WAV management
 
@@ -150,6 +185,7 @@ Manual hard restart:
 ```bash
 bash scripts/hard-restart-worker.sh stt
 bash scripts/hard-restart-worker.sh tts
+bash scripts/hard-restart-worker.sh kokoro
 ```
 
 Gateway-managed hard restart is disabled by default. To enable:
@@ -163,7 +199,7 @@ Then:
 ```bash
 curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/unload \
   -H 'content-type: application/json' \
-  -d '{"strategy":"hard"}' | jq .
+  -d '{"provider":"kokoro","strategy":"hard"}' | jq .
 ```
 
 ## GPU memory before/after switching
@@ -199,8 +235,8 @@ Do not change `/api/stt/transcribe` or `/transcribe` unless adding optional fiel
 
 1. Add provider metadata under `tts/providers/<provider-id>`.
 2. Add model descriptors under `tts/models/<provider-id>`.
-3. Put voice/reference files under `/opt/local-ai-voice/voices/<provider-id>`.
-4. Implement `POST /speak` in a private worker.
-5. Add catalog entries and environment defaults.
+3. Put reference files under `/opt/local-ai-voice/voices/<provider-id>` only if the provider supports uploaded/reference audio.
+4. Implement `POST /speak` and, when applicable, `GET /voices` in a private worker.
+5. Add catalog entries, provider registry wiring, environment defaults, and systemd units.
 
-The Kokoro placeholder documents this contract without shipping an implementation.
+Kokoro now provides the first second-provider implementation of this contract.

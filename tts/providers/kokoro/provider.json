@@ -1,0 +1,28 @@
+{
+  "id": "kokoro",
+  "role": "tts",
+  "label": "Kokoro TTS",
+  "worker": {
+    "defaultUrl": "http://127.0.0.1:8003",
+    "systemdService": "local-ai-voice-tts-kokoro.service",
+    "directory": "workers/tts-kokoro"
+  },
+  "models": [
+    {
+      "id": "kokoro-82m",
+      "repoId": "hexgrad/Kokoro-82M",
+      "package": "kokoro==0.9.4",
+      "sampleRateHz": 24000,
+      "supportsReferenceAudio": false,
+      "supportsVoiceCloning": false,
+      "supportsLanguageSelection": true,
+      "defaultVoice": "af_heart",
+      "languages": ["en-us", "en-gb", "es", "fr-fr", "hi", "it", "ja", "pt-br", "zh"]
+    }
+  ],
+  "notes": [
+    "Runs as a private localhost worker, separate from Chatterbox.",
+    "Requires espeak-ng and downloads Hugging Face model/voice assets into the configured cache on first use.",
+    "GPU_ONLY=true requires KOKORO_TTS_DEVICE=cuda and disables CPU fallback."
+  ]
+}

@@ -14,11 +14,11 @@ Returns NVIDIA GPU status from the gateway host via `nvidia-smi`.
 
 ### `GET /models`
 
-Returns STT and TTS model catalogs plus the legacy STT default/active model fields.
+Returns STT and TTS model catalogs plus the legacy STT default/active model fields. TTS catalog entries include both `chatterbox` and `kokoro`.
 
 ### `GET /voices`
 
-Returns voice/reference descriptors. Uploaded Chatterbox reference WAV descriptors include `canDelete: true` and a `deleteUrl` pointing at the safe delete route.
+Returns voice/reference descriptors for the active TTS provider. Add `?provider=kokoro` to list Kokoro built-in voices. Uploaded Chatterbox reference WAV descriptors include `canDelete: true` and a `deleteUrl` pointing at the safe delete route.
 
 ### `GET /model/default`
 
@@ -51,6 +51,7 @@ Fields:
 | `temperature` | no | Sampling control where supported. |
 | `language` | no | Required for some multilingual use. |
 | `model` | no | Must match currently loaded model unless worker autoloads it. |
+| `provider` | no | `chatterbox` or `kokoro`; if omitted, the configured default provider/model is used. |
 
 Response:
 
@@ -163,7 +164,7 @@ Returns:
 
 ### `GET /api/services`
 
-Returns both worker health objects. The TTS object also includes `activeReferenceAudio` when a Chatterbox reference WAV is configured.
+Returns STT health, active/default TTS health, and a `ttsProviders` array with Chatterbox/Kokoro provider states. The TTS object also includes `activeReferenceAudio` when a Chatterbox reference WAV is configured and active.
 
 ### `GET /api/services/stt`
 
@@ -171,7 +172,7 @@ Returns STT worker health.
 
 ### `GET /api/services/tts`
 
-Returns TTS worker health plus the active Chatterbox reference metadata:
+Returns TTS worker health plus the active Chatterbox reference metadata. Add `?provider=kokoro` to inspect Kokoro instead of the active/default TTS provider:
 
 ```json
 {
@@ -192,7 +193,7 @@ Returns TTS worker health plus the active Chatterbox reference metadata:
 
 ### `GET /api/models`
 
-Returns both STT and TTS catalogs.
+Returns both STT and TTS catalogs, plus `ttsProviders` metadata describing model IDs, default model/voice, capabilities, worker URL, and systemd service for `chatterbox` and `kokoro`.
 
 ### `GET /api/models/stt`
 
@@ -200,7 +201,7 @@ Returns STT catalog and worker model status.
 
 ### `GET /api/models/tts`
 
-Returns TTS catalog and worker model status.
+Returns the TTS catalog and provider model status. Add `?provider=kokoro` to filter models/status to Kokoro. The response also includes a `statuses` map keyed by provider.
 
 ### `POST /api/models/stt/load`
 
@@ -234,16 +235,16 @@ Request:
 
 ```json
 {
-  "provider": "chatterbox",
-  "model": "chatterbox-turbo",
-  "language": "en",
+  "provider": "kokoro",
+  "model": "kokoro-82m",
+  "language": "a",
   "options": {}
 }
 ```
 
 ### `POST /api/models/tts/unload`
 
-Same shape as STT unload.
+Same shape as STT unload, with an optional `provider` field. Hard unload restarts the provider-specific worker service when enabled: `local-ai-voice-tts-chatterbox.service` or `local-ai-voice-tts-kokoro.service`.
 
 ### `POST /api/stt/transcribe`
 
@@ -266,6 +267,18 @@ curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
   --output out.wav
 ```
 
+
+JSON example using Kokoro built-in voice packs:
+
+```bash
+curl -f -X POST http://127.0.0.1:8000/api/tts/speak \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Hello from Kokoro.","provider":"kokoro","model":"kokoro-82m","voice":"af_heart","language":"a","speed":1.0}' \
+  --output kokoro.wav
+```
+
+For Kokoro, `reference_audio`, `referenceId`, and reference-style `.wav` `voice` values are rejected because Kokoro uses named built-in voices.
+
 JSON example overriding the active reference:
 
 ```json
@@ -283,6 +296,21 @@ JSON example overriding the active reference:
   }
 }
 ```
+
+### `GET /api/voices`
+
+Returns voice descriptors for a TTS provider. Without a query parameter, the active/default TTS provider is used.
+
+```bash
+curl -fsS http://127.0.0.1:8000/api/voices?provider=kokoro | jq '.voices[0:5]'
+curl -fsS http://127.0.0.1:8000/api/voices?provider=chatterbox | jq .
+```
+
+Kokoro descriptors are built-in voices such as `af_heart`, `bf_emma`, and `zf_xiaoxiao`. Chatterbox descriptors include the `reference-upload` placeholder plus uploaded reference WAVs.
+
+### `GET /api/tts/providers`
+
+Returns provider descriptors and live health/status for all configured TTS providers. This is the portal's provider-capability source and is useful for checking whether the Kokoro worker on `127.0.0.1:8003` is available.
 
 ### `POST /api/tts/reference-audio`
 

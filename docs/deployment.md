@@ -18,10 +18,10 @@ sudo apt-get install -y \
   ca-certificates curl wget gnupg lsb-release unzip jq git rsync \
   build-essential pkg-config cmake \
   python3 python3.12-venv python3-pip python3-dev \
-  ffmpeg sox pciutils usbutils htop nvtop ufw logrotate
+  ffmpeg sox espeak-ng libsndfile1 pciutils usbutils htop nvtop ufw logrotate
 ```
 
-`ffmpeg` is useful for test audio conversion even though faster-whisper decodes through PyAV.
+`ffmpeg` is useful for test audio conversion even though faster-whisper decodes through PyAV. `espeak-ng` and `libsndfile1` are required by Kokoro/soundfile synthesis support.
 
 ## 3. Install Node.js 24 LTS and pnpm
 
@@ -136,6 +136,7 @@ This creates:
 ```text
 /opt/local-ai-voice/workers/stt/.venv
 /opt/local-ai-voice/workers/tts/.venv
+/opt/local-ai-voice/workers/tts-kokoro/.venv
 /opt/local-ai-voice/config/worker-libs.env
 ```
 
@@ -146,7 +147,14 @@ This creates:
 ```bash
 /opt/local-ai-voice/workers/tts/.venv/bin/python - <<'PY'
 import torch
-print('torch', torch.__version__)
+print('chatterbox torch', torch.__version__)
+print('cuda available', torch.cuda.is_available())
+print('device', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')
+PY
+
+/opt/local-ai-voice/workers/tts-kokoro/.venv/bin/python - <<'PY'
+import torch
+print('kokoro torch', torch.__version__)
 print('cuda available', torch.cuda.is_available())
 print('device', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')
 PY
@@ -181,6 +189,10 @@ DEFAULT_STT_COMPUTE_TYPE=int8_float16
 DEFAULT_TTS_MODEL=chatterbox-turbo
 STT_WORKER_URL=http://127.0.0.1:8002
 TTS_WORKER_URL=http://127.0.0.1:8001
+KOKORO_TTS_WORKER_URL=http://127.0.0.1:8003
+KOKORO_TTS_MODEL=kokoro-82m
+KOKORO_TTS_VOICE=af_heart
+KOKORO_TTS_DEVICE=cuda
 ```
 
 ## 11. Configure firewall
@@ -203,6 +215,7 @@ Change `192.168.0.0/16` to your trusted LAN/VPN range.
 ```bash
 sudo systemctl start local-ai-voice-stt-worker.service
 sudo systemctl start local-ai-voice-tts-chatterbox.service
+sudo systemctl start local-ai-voice-tts-kokoro.service
 sudo systemctl start local-ai-voice-gateway.service
 sudo systemctl status local-ai-voice-gateway.service --no-pager
 ```
@@ -230,7 +243,12 @@ Load TTS:
 ```bash
 curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/load \
   -H 'content-type: application/json' \
-  -d '{"model":"chatterbox-turbo","language":"en"}' | jq .
+  -d '{"provider":"chatterbox","model":"chatterbox-turbo","language":"en"}' | jq .
+
+# Optional Kokoro provider on the independent port 8003
+curl -fsS -X POST http://127.0.0.1:8000/api/models/tts/load \
+  -H 'content-type: application/json' \
+  -d '{"provider":"kokoro","model":"kokoro-82m","language":"a"}' | jq .
 ```
 
 Transcribe:
@@ -251,6 +269,12 @@ curl -fsS -X POST http://127.0.0.1:8000/speak \
   -F text='Hello from the local AI voice appliance.' \
   --output speech.wav
 file speech.wav
+
+curl -fsS http://127.0.0.1:8000/api/voices?provider=kokoro | jq '.voices[0:5]'
+curl -fsS -X POST http://127.0.0.1:8000/api/tts/speak \
+  -H 'content-type: application/json' \
+  -d '{"provider":"kokoro","model":"kokoro-82m","voice":"af_heart","language":"a","text":"Hello from Kokoro."}' \
+  --output kokoro.wav
 ```
 
 ## 14. Updates

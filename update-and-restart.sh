@@ -5,6 +5,7 @@ SERVICES=(
   "local-ai-voice-gateway.service"
   "local-ai-voice-stt-worker.service"
   "local-ai-voice-tts-chatterbox.service"
+  "local-ai-voice-tts-kokoro.service"
 )
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

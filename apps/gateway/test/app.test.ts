@@ -81,13 +81,20 @@ interface CapturedTranscribe {
   fields: Record<string, string>;
 }
 
-function worker(role: 'stt' | 'tts', speaks: CapturedSpeak[] = [], transcribes: CapturedTranscribe[] = []): WorkerClient {
-  const model = role === 'stt' ? 'large-v3-turbo' : 'chatterbox-turbo';
+function worker(
+  role: 'stt' | 'tts',
+  speaks: CapturedSpeak[] = [],
+  transcribes: CapturedTranscribe[] = [],
+  providerOverride?: string,
+  modelOverride?: string
+): WorkerClient {
+  const provider = providerOverride ?? (role === 'stt' ? 'fast-whisper' : 'chatterbox');
+  const model = modelOverride ?? (role === 'stt' ? 'large-v3-turbo' : provider === 'kokoro' ? 'kokoro-82m' : 'chatterbox-turbo');
   return {
     health: async () => ({
       ok: true,
       role,
-      provider: role === 'stt' ? 'fast-whisper' : 'chatterbox',
+      provider,
       state: 'loaded',
       loadedModel: model,
       gpuOnly: true,
@@ -95,21 +102,21 @@ function worker(role: 'stt' | 'tts', speaks: CapturedSpeak[] = [], transcribes: 
     }),
     modelStatus: async () => ({
       role,
-      provider: role === 'stt' ? 'fast-whisper' : 'chatterbox',
+      provider,
       state: 'loaded',
       loadedModel: model,
       defaultModel: model,
       device: 'cuda'
     }),
-    loadModel: async (payload: { model: string }) => ({
+    loadModel: async (payload: { model: string; provider?: string }) => ({
       role,
-      provider: role === 'stt' ? 'fast-whisper' : 'chatterbox',
+      provider: payload.provider ?? provider,
       state: 'loaded',
       loadedModel: payload.model
     }),
-    unloadModel: async () => ({
+    unloadModel: async (payload: { provider?: string } = {}) => ({
       role,
-      provider: role === 'stt' ? 'fast-whisper' : 'chatterbox',
+      provider: payload.provider ?? provider,
       state: 'unloaded',
       loadedModel: null
     }),
@@ -132,8 +139,21 @@ function worker(role: 'stt' | 'tts', speaks: CapturedSpeak[] = [], transcribes: 
     },
     speak: async (payload: SpeakRequest, referenceAudio?: UploadedAudio) => {
       speaks.push({ payload, referenceAudio });
-      return new Response(responseBodyFromBuffer(wavBuffer()), { headers: { 'content-type': 'audio/wav' } });
+      return new Response(responseBodyFromBuffer(wavBuffer()), {
+        headers: {
+          'content-type': 'audio/wav',
+          'x-local-ai-voice-engine': `${provider}-tts`,
+          'x-local-ai-voice-model': payload.model ?? model,
+          'x-local-ai-voice-voice': payload.voice ?? ''
+        }
+      });
     },
+    voices: async () => ({
+      voices:
+        provider === 'kokoro'
+          ? [{ id: 'af_heart', provider, label: 'Heart (en-us)', language: 'en-us', referenceAudio: false }]
+          : [{ id: 'reference-upload', provider, label: 'Uploaded reference WAV', referenceAudio: true }]
+    }),
     config: async () => ({})
   } as unknown as WorkerClient;
 }
@@ -450,6 +470,70 @@ describe('gateway routes', () => {
     expect(body.filename).not.toContain('/');
     expect(body).not.toHaveProperty('path');
     expect(existsSync(path.join(config.voiceDir, 'chatterbox', body.referenceId))).toBe(true);
+    await app.close();
+  });
+
+
+  it('exposes Kokoro in the TTS catalog and provider metadata', async () => {
+    const app = await buildApp({ config: tempConfig(), sttClient: worker('stt'), ttsClient: worker('tts') });
+
+    const response = await app.inject({ method: 'GET', url: '/api/models' });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.tts).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'kokoro-82m', provider: 'kokoro' })]));
+    expect(body.ttsProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'kokoro', defaultModel: 'kokoro-82m', supportsReferenceAudio: false })
+      ])
+    );
+    await app.close();
+  });
+
+  it('lists Kokoro voices without requiring reference audio storage', async () => {
+    const kokoroSpeaks: CapturedSpeak[] = [];
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: { chatterbox: worker('tts'), kokoro: worker('tts', kokoroSpeaks, [], 'kokoro', 'kokoro-82m') }
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/api/voices?provider=kokoro' });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ provider: 'kokoro', activeReferenceAudio: null });
+    expect(response.json().voices).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'af_heart', provider: 'kokoro', referenceAudio: false })])
+    );
+    await app.close();
+  });
+
+  it('routes Kokoro synthesis requests to the Kokoro worker without touching Chatterbox', async () => {
+    const chatterboxSpeaks: CapturedSpeak[] = [];
+    const kokoroSpeaks: CapturedSpeak[] = [];
+    const app = await buildApp({
+      config: tempConfig(),
+      sttClient: worker('stt'),
+      ttsClients: {
+        chatterbox: worker('tts', chatterboxSpeaks),
+        kokoro: worker('tts', kokoroSpeaks, [], 'kokoro', 'kokoro-82m')
+      }
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/tts/speak',
+      payload: { text: 'Kokoro should speak this.', provider: 'kokoro', voice: 'af_heart' }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(chatterboxSpeaks).toHaveLength(0);
+    expect(kokoroSpeaks).toHaveLength(1);
+    expect(kokoroSpeaks.at(-1)?.payload).toMatchObject({
+      provider: 'kokoro',
+      model: 'kokoro-82m',
+      voice: 'af_heart'
+    });
     await app.close();
   });
 

@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { GpuDeviceInfo, ModelDescriptor, TtsReferenceAudio, WorkerHealth } from '@local-ai-voice/shared';
-import { api, type ConfigResponse, type HealthResponse, type LogsResponse, type ModelsResponse } from './api.js';
+import type { GpuDeviceInfo, ModelDescriptor, TtsReferenceAudio, VoiceDescriptor, WorkerHealth } from '@local-ai-voice/shared';
+import {
+  api,
+  type ConfigResponse,
+  type HealthResponse,
+  type LogsResponse,
+  type ModelsResponse,
+  type SpeakResponse,
+  type VoicesResponse
+} from './api.js';
 
 type LoadStrategy = 'soft' | 'hard';
 
@@ -12,6 +20,10 @@ function bytes(kib: number | undefined): string {
 
 function mib(value: number | undefined): string {
   return value === undefined ? 'unknown' : `${value.toLocaleString()} MiB`;
+}
+
+function modelKey(model: ModelDescriptor): string {
+  return `${model.provider}:${model.id}`;
 }
 
 function StatusPill({ ok, label }: { ok: boolean; label: string }) {
@@ -92,6 +104,30 @@ function ServiceCard({ title, health }: { title: string; health?: WorkerHealth }
   );
 }
 
+function TtsProviderStatus({ health }: { health?: HealthResponse }) {
+  const providers = health?.ttsProviders ?? [];
+  return (
+    <section className="card">
+      <h2>TTS providers</h2>
+      {providers.length === 0 ? (
+        <p className="hint">Provider status will appear after the gateway refreshes.</p>
+      ) : (
+        <div className="provider-list">
+          {providers.map((provider) => (
+            <div key={provider.id} className="provider-row">
+              <div>
+                <strong>{provider.label}</strong>
+                <span>{provider.id}</span>
+              </div>
+              <StatusPill ok={Boolean(provider.health?.ok)} label={provider.health?.state ?? 'unknown'} />
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ModelPicker({
   role,
   models,
@@ -101,20 +137,20 @@ function ModelPicker({
 }: {
   role: 'STT' | 'TTS';
   models: ModelDescriptor[];
-  onLoad: (model: string, language: string) => Promise<void>;
-  onUnload: (strategy: LoadStrategy) => Promise<void>;
-  onSetDefault: (model: string, language: string) => Promise<void>;
+  onLoad: (provider: string, model: string, language: string) => Promise<void>;
+  onUnload: (provider: string, strategy: LoadStrategy) => Promise<void>;
+  onSetDefault: (provider: string, model: string, language: string) => Promise<void>;
 }) {
-  const defaultModel = models[0]?.id ?? '';
-  const [model, setModel] = useState(defaultModel);
+  const defaultKey = models[0] ? modelKey(models[0]) : '';
+  const [selectedKey, setSelectedKey] = useState(defaultKey);
   const [language, setLanguage] = useState('en');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!model && defaultModel) setModel(defaultModel);
-  }, [defaultModel, model]);
+    if (!selectedKey && defaultKey) setSelectedKey(defaultKey);
+  }, [defaultKey, selectedKey]);
 
-  const selected = models.find((candidate) => candidate.id === model);
+  const selected = models.find((candidate) => modelKey(candidate) === selectedKey) ?? models[0];
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -130,9 +166,9 @@ function ModelPicker({
       <h2>{role} model control</h2>
       <label>
         Model
-        <select value={model} onChange={(event) => setModel(event.target.value)}>
+        <select value={selected ? modelKey(selected) : ''} onChange={(event) => setSelectedKey(event.target.value)}>
           {models.map((candidate) => (
-            <option key={`${candidate.provider}:${candidate.id}`} value={candidate.id}>
+            <option key={modelKey(candidate)} value={modelKey(candidate)}>
               {candidate.label} ({candidate.provider})
             </option>
           ))}
@@ -141,26 +177,27 @@ function ModelPicker({
       {role === 'TTS' && (
         <label>
           Language
-          <input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en" />
+          <input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en or a" />
         </label>
       )}
       <div className="actions">
-        <button disabled={busy || !model} onClick={() => void run(() => onLoad(model, language))}>
+        <button disabled={busy || !selected} onClick={() => selected && void run(() => onLoad(selected.provider, selected.id, language))}>
           Load
         </button>
-        <button disabled={busy} onClick={() => void run(() => onUnload('soft'))}>
+        <button disabled={busy || !selected} onClick={() => selected && void run(() => onUnload(selected.provider, 'soft'))}>
           Soft unload
         </button>
-        <button disabled={busy} onClick={() => void run(() => onUnload('hard'))}>
+        <button disabled={busy || !selected} onClick={() => selected && void run(() => onUnload(selected.provider, 'hard'))}>
           Hard restart
         </button>
-        <button disabled={busy || !model} onClick={() => void run(() => onSetDefault(model, language))}>
+        <button disabled={busy || !selected} onClick={() => selected && void run(() => onSetDefault(selected.provider, selected.id, language))}>
           Set default
         </button>
       </div>
       {selected && (
         <p className="hint">
           {selected.description} Approx VRAM: {selected.approximateVramMiB ? `${selected.approximateVramMiB} MiB` : 'unknown'}.
+          {selected.supportsReferenceAudio ? ' Supports reference WAV.' : ' Uses built-in voices.'}
         </p>
       )}
     </section>
@@ -221,9 +258,7 @@ function ReferenceUpload({
   const [uploadError, setUploadError] = useState('');
   const [busy, setBusy] = useState(false);
   const selectedFileLooksValid =
-    !file ||
-    file.name.toLowerCase().endsWith('.wav') ||
-    ['audio/wav', 'audio/x-wav', 'audio/wave'].includes(file.type);
+    !file || file.name.toLowerCase().endsWith('.wav') || ['audio/wav', 'audio/x-wav', 'audio/wave'].includes(file.type);
 
   async function upload() {
     if (!file || !selectedFileLooksValid) return;
@@ -231,7 +266,7 @@ function ReferenceUpload({
     setMessage('');
     setUploadError('');
     try {
-      const result = await api.uploadReference(file, true);
+      const result = await api.uploadReference(file, true, 'chatterbox');
       setMessage(`Uploaded and activated ${result.filename || result.referenceId}`);
       await onUploaded();
     } catch (err) {
@@ -244,7 +279,7 @@ function ReferenceUpload({
   return (
     <section className="card">
       <h2>Chatterbox reference WAV</h2>
-      <p className="hint">Upload short reference WAV clips for voice cloning or conditioning. Keep files consented and local.</p>
+      <p className="hint">Upload short reference WAV clips for Chatterbox voice cloning or conditioning. Keep files consented and local.</p>
       <div className="kv compact">
         <span>Active reference</span>
         <strong>{activeReference ? `${activeReference.filename} (${activeReference.referenceId})` : 'none configured'}</strong>
@@ -264,6 +299,164 @@ function ReferenceUpload({
       </button>
       {message && <p className="hint">{message}</p>}
       {uploadError && <p className="error">{uploadError}</p>}
+    </section>
+  );
+}
+
+function preferredVoice(provider: string, voices: VoiceDescriptor[], activeReference?: TtsReferenceAudio | null): string {
+  if (provider === 'chatterbox') return activeReference?.referenceId ?? 'reference-upload';
+  if (provider === 'kokoro' && voices.some((voice) => voice.id === 'af_heart')) return 'af_heart';
+  return voices[0]?.id ?? '';
+}
+
+function TtsSpeakCard({ models, configView }: { models: ModelDescriptor[]; configView?: ConfigResponse }) {
+  const configuredProvider = configView?.mutable.tts?.provider ?? 'chatterbox';
+  const configuredModel = configView?.mutable.tts?.defaultModel;
+  const configuredLanguage = configView?.mutable.tts?.language ?? 'en';
+  const providers = useMemo(() => [...new Set(models.map((model) => model.provider))], [models]);
+  const [provider, setProvider] = useState(configuredProvider);
+  const providerModels = models.filter((model) => model.provider === provider);
+  const [model, setModel] = useState(configuredModel ?? providerModels[0]?.id ?? '');
+  const [language, setLanguage] = useState(configuredLanguage);
+  const [voice, setVoice] = useState('');
+  const [text, setText] = useState('Hello from the local AI voice appliance.');
+  const [speed, setSpeed] = useState('1');
+  const [voices, setVoices] = useState<VoicesResponse>();
+  const [audioUrl, setAudioUrl] = useState('');
+  const [result, setResult] = useState<SpeakResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!providers.includes(provider) && providers[0]) setProvider(providers[0]);
+  }, [provider, providers]);
+
+  useEffect(() => {
+    const modelsForProvider = models.filter((candidate) => candidate.provider === provider);
+    if (!modelsForProvider.some((candidate) => candidate.id === model)) {
+      const configured = provider === configuredProvider ? configuredModel : undefined;
+      setModel(configured ?? modelsForProvider[0]?.id ?? '');
+    }
+  }, [configuredModel, configuredProvider, model, models, provider]);
+
+  useEffect(() => {
+    setLanguage(provider === configuredProvider ? configuredLanguage : provider === 'kokoro' ? 'a' : 'en');
+  }, [configuredLanguage, configuredProvider, provider]);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .voices(provider)
+      .then((nextVoices) => {
+        if (!active) return;
+        setVoices(nextVoices);
+        setVoice((current) =>
+          nextVoices.voices.some((candidate) => candidate.id === current)
+            ? current
+            : preferredVoice(provider, nextVoices.voices, nextVoices.activeReferenceAudio)
+        );
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, [provider]);
+
+  useEffect(() => {
+    return () => {
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+    };
+  }, [audioUrl]);
+
+  async function synthesize() {
+    setBusy(true);
+    setError('');
+    try {
+      const nextResult = await api.speak({
+        text,
+        provider,
+        model,
+        language,
+        voice: voice && voice !== 'reference-upload' ? voice : undefined,
+        speed: Number.isFinite(Number(speed)) ? Number(speed) : undefined
+      });
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      setResult(nextResult);
+      setAudioUrl(URL.createObjectURL(nextResult.blob));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card wide">
+      <h2>Generate speech</h2>
+      <p className="hint">Choose Chatterbox for reference-WAV cloning or Kokoro for built-in multilingual voices.</p>
+      <div className="form-grid">
+        <label>
+          Provider
+          <select value={provider} onChange={(event) => setProvider(event.target.value)}>
+            {providers.map((candidate) => (
+              <option key={candidate} value={candidate}>
+                {candidate}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Model
+          <select value={model} onChange={(event) => setModel(event.target.value)}>
+            {providerModels.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Voice
+          <select value={voice} onChange={(event) => setVoice(event.target.value)}>
+            {(voices?.voices ?? []).map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.label ?? candidate.id}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Language
+          <input value={language} onChange={(event) => setLanguage(event.target.value)} placeholder="en, a, fr, ja..." />
+        </label>
+        <label>
+          Speed
+          <input value={speed} onChange={(event) => setSpeed(event.target.value)} inputMode="decimal" />
+        </label>
+      </div>
+      <label>
+        Text
+        <textarea value={text} onChange={(event) => setText(event.target.value)} rows={5} />
+      </label>
+      <div className="actions">
+        <button disabled={busy || !text.trim() || !model} onClick={() => void synthesize()}>
+          {busy ? 'Generating...' : 'Generate speech'}
+        </button>
+      </div>
+      {audioUrl && (
+        <div className="audio-result">
+          <audio controls src={audioUrl} />
+          <a href={audioUrl} download="speech.wav">
+            Download WAV
+          </a>
+          <span className="hint">
+            {result?.engine ?? provider} {result?.voice ? `voice ${result.voice}` : ''}
+          </span>
+        </div>
+      )}
+      {error && <p className="error">{error}</p>}
     </section>
   );
 }
@@ -305,8 +498,7 @@ export function App() {
   }, [refresh]);
 
   const applianceOk = useMemo(() => Boolean(health?.ok), [health]);
-  const activeReference =
-    configView?.mutable.tts?.activeReference ?? health?.services.tts.activeReferenceAudio ?? null;
+  const activeReference = configView?.mutable.tts?.activeReference ?? health?.services.tts.activeReferenceAudio ?? null;
 
   async function withRefresh(action: Promise<unknown>) {
     await action;
@@ -335,20 +527,22 @@ export function App() {
         <GpuCard gpu={health?.gpu} />
         <ServiceCard title="Speech to text" health={health?.services.stt} />
         <ServiceCard title="Text to speech" health={health?.services.tts} />
+        <TtsProviderStatus health={health} />
         <ModelPicker
           role="STT"
           models={models.stt}
-          onLoad={(model) => withRefresh(api.loadStt(model))}
-          onUnload={(strategy) => withRefresh(api.unloadStt(strategy))}
-          onSetDefault={(model) => withRefresh(api.patchSttDefault(model))}
+          onLoad={(_provider, model) => withRefresh(api.loadStt(model))}
+          onUnload={(_provider, strategy) => withRefresh(api.unloadStt(strategy))}
+          onSetDefault={(_provider, model) => withRefresh(api.patchSttDefault(model))}
         />
         <ModelPicker
           role="TTS"
           models={models.tts}
-          onLoad={(model, language) => withRefresh(api.loadTts(model, language))}
-          onUnload={(strategy) => withRefresh(api.unloadTts(strategy))}
-          onSetDefault={(model, language) => withRefresh(api.patchTtsDefault(model, language))}
+          onLoad={(provider, model, language) => withRefresh(api.loadTts(provider, model, language))}
+          onUnload={(provider, strategy) => withRefresh(api.unloadTts(provider, strategy))}
+          onSetDefault={(provider, model, language) => withRefresh(api.patchTtsDefault(provider, model, language))}
         />
+        <TtsSpeakCard models={models.tts} configView={configView} />
         <ReferenceUpload activeReference={activeReference} onUploaded={refresh} />
         <StorageCard system={system} />
         <LogsCard logs={logs} />

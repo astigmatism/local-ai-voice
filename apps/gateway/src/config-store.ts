@@ -37,7 +37,10 @@ export class ConfigStore {
       },
       tts: {
         provider: this.config.defaultTtsProvider,
-        defaultModel: this.config.defaultTtsModel,
+        defaultModel:
+          this.config.defaultTtsProvider === 'kokoro'
+            ? this.config.kokoroDefaultTtsModel
+            : this.config.defaultTtsModel,
         language: this.config.defaultTtsLanguage,
         activeReferenceId: null,
         activeReference: null

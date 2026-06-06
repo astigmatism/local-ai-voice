@@ -1,6 +1,6 @@
 [Unit]
 Description=Local AI Voice Node gateway and portal
-After=network-online.target local-ai-voice-stt-worker.service local-ai-voice-tts-chatterbox.service
+After=network-online.target local-ai-voice-stt-worker.service local-ai-voice-tts-chatterbox.service local-ai-voice-tts-kokoro.service
 Wants=network-online.target
 
 [Service]

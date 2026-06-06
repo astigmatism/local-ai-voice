@@ -5,7 +5,8 @@ import type {
   TranscriptResponse,
   UnloadModelRequest,
   WorkerHealth,
-  ServiceRole
+  ServiceRole,
+  VoiceDescriptor
 } from '@local-ai-voice/shared';
 import type { UploadedAudio } from './storage.js';
 
@@ -92,6 +93,10 @@ export class WorkerClient {
 
   async config(): Promise<Record<string, unknown>> {
     return await this.json<Record<string, unknown>>('/config');
+  }
+
+  async voices(): Promise<{ voices: VoiceDescriptor[] }> {
+    return await this.json<{ voices: VoiceDescriptor[] }>('/voices');
   }
 
   private uploadBlob(upload: UploadedAudio, fallbackType: string): Blob {

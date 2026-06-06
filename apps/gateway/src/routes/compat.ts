@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { TranscriptResponse } from '@local-ai-voice/shared';
-import { builtInVoices, sttCatalog, ttsCatalog } from '../catalog.js';
+import type { TranscriptResponse, VoiceDescriptor } from '@local-ai-voice/shared';
+import { builtInVoices, providerSupportsReferenceAudio, sttCatalog, ttsCatalog } from '../catalog.js';
 import type { AppConfig } from '../config.js';
 import type { ConfigStore } from '../config-store.js';
 import { getGpuStatus } from '../gpu.js';
@@ -11,6 +11,7 @@ import {
   resolveRequestedOrActiveReferenceId,
   validateReferenceWavUpload
 } from '../reference-audio.js';
+import type { TtsProviderRegistry } from '../tts-providers.js';
 import type { WorkerClient } from '../worker-client.js';
 import {
   getFirstFile,
@@ -26,7 +27,15 @@ export interface CompatRouteDependencies {
   config: AppConfig;
   configStore: ConfigStore;
   sttClient: WorkerClient;
-  ttsClient: WorkerClient;
+  ttsProviders: TtsProviderRegistry;
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function queryProvider(query: unknown): string | undefined {
+  return stringField((query as { provider?: unknown } | undefined)?.provider);
 }
 
 function referenceIdFromSpeakRequest(request: {
@@ -50,6 +59,39 @@ function referenceDeleteLinks(
     deleteUrl,
     _links: { delete: { href: deleteUrl, method: 'DELETE' } }
   };
+}
+
+async function voicesForProvider(
+  config: AppConfig,
+  ttsProviders: TtsProviderRegistry,
+  provider: string,
+  activeReferenceId?: string | null
+): Promise<VoiceDescriptor[]> {
+  const normalized = ttsProviders.resolveProvider(provider, undefined, provider);
+  const builtIns = builtInVoices(normalized);
+  const workerVoices = await ttsProviders
+    .client(normalized)
+    .voices()
+    .then((response) => response.voices)
+    .catch(() => [] as VoiceDescriptor[]);
+  const byId = new Map<string, VoiceDescriptor>();
+  for (const voice of [...builtIns, ...workerVoices]) {
+    if (voice.provider !== normalized) continue;
+    byId.set(voice.id, { ...voice, provider: normalized });
+  }
+  if (providerSupportsReferenceAudio(normalized)) {
+    const uploaded = await listReferenceAudio(config, normalized);
+    for (const reference of uploaded) {
+      byId.set(reference.referenceId, {
+        ...reference,
+        label: reference.filename,
+        referenceAudio: true,
+        active: reference.referenceId === activeReferenceId,
+        ...referenceDeleteLinks(reference.referenceId)
+      } as VoiceDescriptor);
+    }
+  }
+  return [...byId.values()];
 }
 
 function timestamp(seconds: number, decimalSeparator: ',' | '.'): string {
@@ -127,15 +169,18 @@ async function handleOpenAiTranscription(
 }
 
 export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRouteDependencies): Promise<void> {
-  const { config, configStore, sttClient, ttsClient } = deps;
+  const { config, configStore, sttClient, ttsProviders } = deps;
 
   app.get('/health', async () => {
-    const [stt, tts] = await Promise.all([sttClient.health(), ttsClient.health()]);
+    const mutable = await configStore.read();
+    const provider = ttsProviders.resolveProvider(undefined, mutable.tts.defaultModel, mutable.tts.provider);
+    const [stt, tts] = await Promise.all([sttClient.health(), ttsProviders.health(provider)]);
     return {
       status: stt.ok || tts.ok ? 'ok' : 'degraded',
       gateway: 'local-ai-voice-node-gateway',
       stt,
-      tts
+      tts,
+      ttsProviders: await ttsProviders.providerStates()
     };
   });
 
@@ -143,29 +188,25 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
 
   app.get('/models', async () => {
     const mutable = await configStore.read();
+    const ttsProvider = ttsProviders.resolveProvider(undefined, mutable.tts.defaultModel, mutable.tts.provider);
     return {
       default_model: mutable.stt.defaultModel,
       active_model: (await sttClient.modelStatus().catch(() => undefined))?.loadedModel ?? null,
       stt: sttCatalog(config),
-      tts: ttsCatalog(config)
+      tts: ttsCatalog(config),
+      tts_provider: ttsProvider,
+      tts_status: await ttsProviders.modelStatus(ttsProvider).catch(() => null),
+      tts_providers: ttsProviders.descriptors()
     };
   });
 
-  app.get('/voices', async () => {
+  app.get('/voices', async (request) => {
     const mutable = await configStore.read();
-    const active = publicActiveReference(mutable);
-    const uploaded = await listReferenceAudio(config, mutable.tts.provider);
+    const provider = ttsProviders.resolveProvider(queryProvider(request.query), undefined, mutable.tts.provider);
+    const active = provider === mutable.tts.provider ? publicActiveReference(mutable) : null;
     return {
-      voices: [
-        ...builtInVoices(),
-        ...uploaded.map((reference) => ({
-          ...reference,
-          label: reference.filename,
-          referenceAudio: true,
-          active: reference.referenceId === active?.referenceId,
-          ...referenceDeleteLinks(reference.referenceId)
-        }))
-      ],
+      provider,
+      voices: await voicesForProvider(config, ttsProviders, provider, active?.referenceId),
       activeReferenceAudio: active
     };
   });
@@ -178,9 +219,10 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
   app.get('/voice/default', async () => {
     const mutable = await configStore.read();
     const active = publicActiveReference(mutable);
+    const provider = ttsProviders.resolveProvider(undefined, mutable.tts.defaultModel, mutable.tts.provider);
     return {
-      default_voice: active?.referenceId ?? 'reference-upload',
-      provider: mutable.tts.provider,
+      default_voice: active?.referenceId ?? ttsProviders.defaultVoice(provider) ?? 'reference-upload',
+      provider,
       model: mutable.tts.defaultModel,
       activeReferenceAudio: active
     };
@@ -198,24 +240,35 @@ export async function registerCompatRoutes(app: FastifyInstance, deps: CompatRou
       } else {
         speakRequest = normalizeSpeakRequest(request.body);
       }
-      if (!referenceAudio) {
-        const mutable = await configStore.read();
-        const resolvedReferenceId = await resolveRequestedOrActiveReferenceId(
-          config,
-          mutable,
-          referenceIdFromSpeakRequest(speakRequest)
-        );
+      const mutable = await configStore.read();
+      const provider = ttsProviders.resolveProvider(speakRequest.provider, speakRequest.model, mutable.tts.provider);
+      const requestedReferenceId = referenceIdFromSpeakRequest(speakRequest);
+      if (referenceAudio && !providerSupportsReferenceAudio(provider)) {
+        throw new HttpError(400, `${provider} does not support reference audio uploads.`);
+      }
+      if (requestedReferenceId && !providerSupportsReferenceAudio(provider)) {
+        throw new HttpError(400, `${provider} does not support reference audio ids.`);
+      }
+      speakRequest = {
+        ...speakRequest,
+        provider,
+        model: speakRequest.model ?? (provider === mutable.tts.provider ? mutable.tts.defaultModel : ttsProviders.defaultModel(provider)),
+        language: speakRequest.language ?? (provider === mutable.tts.provider ? mutable.tts.language : config.defaultTtsLanguage),
+        voice: speakRequest.voice ?? ttsProviders.defaultVoice(provider)
+      };
+      if (!referenceAudio && providerSupportsReferenceAudio(provider)) {
+        const resolvedReferenceId = await resolveRequestedOrActiveReferenceId(config, mutable, requestedReferenceId, provider);
         if (resolvedReferenceId) {
           speakRequest = { ...speakRequest, referenceId: resolvedReferenceId, referenceAudioId: resolvedReferenceId };
         }
       }
-      const response = await ttsClient.speak(speakRequest, referenceAudio);
+      const response = await ttsProviders.client(provider).speak(speakRequest, referenceAudio);
       const body = Buffer.from(await response.arrayBuffer());
       reply
         .header('content-type', response.headers.get('content-type') ?? 'audio/wav')
         .header('content-disposition', response.headers.get('content-disposition') ?? 'attachment; filename="speech.wav"')
         .header('x-sample-rate', response.headers.get('x-sample-rate') ?? '24000')
-        .header('x-engine', response.headers.get('x-engine') ?? 'chatterbox-tts')
+        .header('x-engine', response.headers.get('x-engine') ?? `${provider}-tts`)
         .send(body);
     } catch (error) {
       sendError(reply, error);

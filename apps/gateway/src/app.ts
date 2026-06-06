@@ -10,12 +10,15 @@ import { ConfigStore } from './config-store.js';
 import { registerApiRoutes } from './routes/api.js';
 import { registerCompatRoutes } from './routes/compat.js';
 import { ensureRuntimeDirectories } from './storage.js';
+import { TtsProviderRegistry, type TtsProviderId } from './tts-providers.js';
 import { WorkerClient } from './worker-client.js';
 
 export interface BuildAppOptions {
   config?: AppConfig;
   sttClient?: WorkerClient;
   ttsClient?: WorkerClient;
+  ttsClients?: Partial<Record<TtsProviderId, WorkerClient>>;
+  ttsProviders?: TtsProviderRegistry;
 }
 
 function safeBasicAuthEquals(a: string, b: string): boolean {
@@ -99,17 +102,15 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
       baseUrl: config.sttWorkerUrl,
       timeoutMs: config.workerTimeoutMs
     });
-  const ttsClient =
-    options.ttsClient ??
-    new WorkerClient({
-      role: 'tts',
-      provider: config.defaultTtsProvider,
-      baseUrl: config.ttsWorkerUrl,
-      timeoutMs: config.workerTimeoutMs
-    });
+  const ttsClients = { ...options.ttsClients };
+  if (options.ttsClient) {
+    const provider = config.defaultTtsProvider === 'kokoro' ? 'kokoro' : 'chatterbox';
+    ttsClients[provider] = options.ttsClient;
+  }
+  const ttsProviders = options.ttsProviders ?? new TtsProviderRegistry(config, ttsClients);
 
-  await registerApiRoutes(app, { config, configStore, sttClient, ttsClient });
-  await registerCompatRoutes(app, { config, configStore, sttClient, ttsClient });
+  await registerApiRoutes(app, { config, configStore, sttClient, ttsProviders });
+  await registerCompatRoutes(app, { config, configStore, sttClient, ttsProviders });
 
   if (config.portalEnabled && existsSync(config.portalDistDir)) {
     const fastifyStatic = (await import('@fastify/static')).default;

@@ -12,6 +12,7 @@ fi
 
 STT_VENV="$BASE_DIR/workers/stt/.venv"
 TTS_VENV="$BASE_DIR/workers/tts/.venv"
+KOKORO_TTS_VENV="$BASE_DIR/workers/tts-kokoro/.venv"
 
 create_venv() {
   local venv_path="$1"
@@ -19,6 +20,11 @@ create_venv() {
     "$PYTHON_BIN" -m venv "$venv_path"
   fi
   "$venv_path/bin/python" -m pip install --upgrade pip setuptools wheel
+}
+
+install_torch() {
+  local venv_path="$1"
+  "$venv_path/bin/pip" install torch torchaudio --index-url "$PYTORCH_CUDA_INDEX_URL"
 }
 
 create_venv "$STT_VENV"
@@ -46,7 +52,18 @@ if [ -n "$STT_LD_LIBRARY_PATH" ]; then
 fi
 
 create_venv "$TTS_VENV"
-"$TTS_VENV/bin/pip" install torch torchaudio --index-url "$PYTORCH_CUDA_INDEX_URL"
+install_torch "$TTS_VENV"
 "$TTS_VENV/bin/pip" install -r "$APP_DIR/workers/tts-chatterbox/requirements.txt"
+
+create_venv "$KOKORO_TTS_VENV"
+install_torch "$KOKORO_TTS_VENV"
+"$KOKORO_TTS_VENV/bin/pip" install -r "$APP_DIR/workers/tts-kokoro/requirements.txt"
+
+if ! command -v espeak-ng >/dev/null 2>&1; then
+  cat >&2 <<'EOF_WARN'
+WARNING: espeak-ng was not found on PATH. Kokoro text normalization and phonemization require it.
+Install it with: sudo apt-get install -y espeak-ng libsndfile1
+EOF_WARN
+fi
 
 echo "Worker virtual environments are ready."

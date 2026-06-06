@@ -42,4 +42,31 @@ describe('portal api helpers', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/tts/reference-audio', expect.objectContaining({ method: 'POST' }));
     expect(result).toMatchObject({ ok: true, referenceId: 'reference-test.wav', active: true });
   });
+
+  it('posts Kokoro speak requests and returns audio metadata', async () => {
+    const audio = new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/wav' });
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(_url).toBe('/api/tts/speak');
+      expect(init?.method).toBe('POST');
+      expect(init?.headers).toMatchObject({ 'content-type': 'application/json' });
+      expect(JSON.parse(String(init?.body))).toMatchObject({ provider: 'kokoro', voice: 'af_heart' });
+      return new Response(audio, {
+        status: 200,
+        headers: {
+          'content-type': 'audio/wav',
+          'x-local-ai-voice-engine': 'kokoro-tts',
+          'x-local-ai-voice-model': 'kokoro-82m',
+          'x-local-ai-voice-voice': 'af_heart'
+        }
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await api.speak({ text: 'hello', provider: 'kokoro', voice: 'af_heart' });
+
+    expect(result.contentType).toBe('audio/wav');
+    expect(result.engine).toBe('kokoro-tts');
+    expect(result.model).toBe('kokoro-82m');
+    expect(result.voice).toBe('af_heart');
+  });
 });
