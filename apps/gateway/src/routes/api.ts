@@ -193,6 +193,7 @@ function publicProviderState(provider: TtsProviderRuntimeStatus, mutable: Mutabl
     systemdService: provider.systemdService,
     enabled: provider.enabled,
     active: provider.active,
+    autoLoad: providerDefaults?.autoLoad ?? provider.autoLoad,
     reachable: provider.reachable,
     state: provider.state,
     model: provider.model ?? providerDefaults?.defaultModel ?? provider.defaultModel,
@@ -528,7 +529,7 @@ export async function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDepe
             defaultVoice?: string;
             language?: string;
             activeReferenceId?: string | null;
-            providers?: Record<string, { defaultModel?: string; defaultVoice?: string; language?: string; enabled?: boolean }>;
+            providers?: Record<string, { defaultModel?: string; defaultVoice?: string; language?: string; enabled?: boolean; autoLoad?: boolean }>;
           }
         | undefined;
       const mutable = await configStore.read();

@@ -10,7 +10,7 @@ import type { WorkerClient } from '../src/worker-client.js';
 
 const tmpRoots: string[] = [];
 
-function tempConfig() {
+function tempConfig(overrides: NodeJS.ProcessEnv = {}) {
   const baseDir = mkdtempSync(path.join(os.tmpdir(), 'lav-gateway-'));
   tmpRoots.push(baseDir);
   return loadConfig({
@@ -25,7 +25,8 @@ function tempConfig() {
     PORTAL_ENABLED: 'false',
     API_DOCS_ENABLED: 'false',
     PUBLIC_PORT: '0',
-    AUTH_ENABLED: 'false'
+    AUTH_ENABLED: 'false',
+    ...overrides
   } as NodeJS.ProcessEnv);
 }
 
